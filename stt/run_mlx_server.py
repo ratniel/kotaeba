@@ -75,8 +75,9 @@ if __name__ == "__main__":
         bufsize=1,
     )
 
-    for line in process.stdout:
-        logger.opt(raw=True).info(line)
+    if process.stdout:
+        for line in process.stdout:
+            logger.opt(raw=True).info(line)
 
     process.wait()
     if process.returncode != 0:
