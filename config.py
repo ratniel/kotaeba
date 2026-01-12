@@ -39,6 +39,7 @@ class AudioConfig(BaseModel):
 class VADConfig(BaseModel):
     """Voice Activity Detection configuration."""
 
+    enabled: bool = Field(default=True, description="Enable or disable VAD")
     frame_duration_ms: int = Field(
         default=30, description="VAD frame size (10, 20, or 30ms)"
     )
@@ -93,7 +94,9 @@ class Settings(BaseSettings):
     LOG_COMPRESSION: str = Field(default="zip", description="Log compression format")
 
     # Recording Configuration
-    RECORDINGS_DIR: str = Field(default="recordings", description="Recordings directory")
+    RECORDINGS_DIR: str = Field(
+        default="recordings", description="Recordings directory"
+    )
 
 
 def validate_configuration() -> Settings:
