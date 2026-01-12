@@ -49,7 +49,7 @@ class WebSocketSTTClient:
         self.running = False
         self.server_process = None
         self.ws_uri = f"ws://{settings.STT_HOST}:{settings.STT_PORT}/v1/audio/transcriptions/realtime"
-        
+
         # Audio recording
         self.audio_buffer = []
         self.transcript_buffer = []
@@ -117,7 +117,7 @@ class WebSocketSTTClient:
                 wf.setsampwidth(self.pa.get_sample_size(getattr(pyaudio, self.format)))
                 wf.setframerate(self.rate)
                 wf.writeframes(b"".join(self.audio_buffer))
-            
+
             size_mb = wav_path.stat().st_size / (1024 * 1024)
             logger.success(f"Saved recording ({size_mb:.2f} MB)")
         except Exception as e:
@@ -220,7 +220,7 @@ class WebSocketSTTClient:
                     language=settings.LANGUAGE,
                     sample_rate=self.rate,
                     channels=self.channels,
-                    vad_enabled=True,
+                    vad_enabled=settings.vad.enabled,
                     vad_aggressiveness=settings.vad.vad_mode,
                 )
                 await websocket.send(config.model_dump_json())
@@ -248,7 +248,7 @@ class WebSocketSTTClient:
                 logger.info("Stopping client...")
                 send_task.cancel()
                 recv_task.cancel()
-                
+
                 # Ensure transcript is saved on stop
                 self._save_transcript()
 
