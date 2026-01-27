@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 /// Manages first-run setup and dependency installation
 ///
@@ -123,35 +124,41 @@ class SetupManager: ObservableObject {
     
     private func createVirtualEnvironment() async throws {
         let uvPath = findUVPath() ?? "~/.local/bin/uv"
-        let venvPath = Constants.Setup.venvPath.path
+        let supportPath = Constants.supportDirectory.path
         
         let script = """
         export PATH="$HOME/.local/bin:$PATH"
-        \(uvPath) venv "\(venvPath)" --python 3.11
+        cd "\(supportPath)"
+        \(uvPath) venv --python 3.11
         """
         try await runShellCommand(script)
     }
-    
+
     private func installDependencies() async throws {
         let uvPath = findUVPath() ?? "~/.local/bin/uv"
-        let venvPath = Constants.Setup.venvPath.path
+        let supportPath = Constants.supportDirectory.path
         
         let script = """
         export PATH="$HOME/.local/bin:$PATH"
-        source "\(venvPath)/bin/activate"
-        \(uvPath) pip install mlx-audio mlx fastapi uvicorn websockets
+        cd "\(supportPath)"
+        # Initialize pyproject.toml if it doesn't exist
+        if [ ! -f "pyproject.toml" ]; then
+            \(uvPath) init --app --no-readme --name kotaeba-server
+        fi
+        # Install dependencies
+        \(uvPath) add mlx-audio mlx fastapi uvicorn websockets
         """
         try await runShellCommand(script)
     }
     
     private func downloadModels() async throws {
-        // This would pre-download the Whisper model
-        // For now, it downloads on first use
-        let venvPath = Constants.Setup.venvPath.path
+        let uvPath = findUVPath() ?? "~/.local/bin/uv"
+        let supportPath = Constants.supportDirectory.path
         
         let script = """
-        source "\(venvPath)/bin/activate"
-        python -c "from mlx_audio.stt import STT; STT()"
+        export PATH="$HOME/.local/bin:$PATH"
+        cd "\(supportPath)"
+        \(uvPath) run python -c "from mlx_audio.stt import STT; STT()"
         """
         try await runShellCommand(script)
     }
@@ -222,3 +229,4 @@ enum SetupError: LocalizedError {
         }
     }
 }
+

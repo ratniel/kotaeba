@@ -18,8 +18,13 @@ struct PermissionManager {
     
     /// Request Accessibility permission (shows system dialog)
     static func requestAccessibilityPermission() {
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
-        AXIsProcessTrustedWithOptions(options as CFDictionary)
+        let currentlyTrusted = AXIsProcessTrusted()
+        print("[PermissionManager] Accessibility currently trusted: \(currentlyTrusted)")
+        if !currentlyTrusted {
+            print("[PermissionManager] Requesting accessibility permission (opening System Settings)...")
+            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
+            AXIsProcessTrustedWithOptions(options as CFDictionary)
+        }
     }
     
     /// Open System Settings to Accessibility pane
@@ -38,6 +43,30 @@ struct PermissionManager {
     /// Request Microphone permission
     static func requestMicrophonePermission() async -> Bool {
         await AVCaptureDevice.requestAccess(for: .audio)
+    }
+
+    /// Request Microphone permission if needed, otherwise open settings
+    static func requestMicrophonePermissionOrOpenSettings() async -> Bool {
+        let status = AVCaptureDevice.authorizationStatus(for: .audio)
+        print("[PermissionManager] Microphone authorization status: \(status.rawValue) (0=notDetermined, 1=restricted, 2=denied, 3=authorized)")
+        switch status {
+        case .notDetermined:
+            print("[PermissionManager] Showing microphone permission dialog...")
+            let result = await AVCaptureDevice.requestAccess(for: .audio)
+            print("[PermissionManager] User responded to mic dialog: \(result)")
+            return result
+        case .authorized:
+            print("[PermissionManager] Already authorized")
+            return true
+        case .denied, .restricted:
+            print("[PermissionManager] Denied/restricted - opening Settings...")
+            openMicrophoneSettings()
+            return false
+        @unknown default:
+            print("[PermissionManager] Unknown status - opening Settings...")
+            openMicrophoneSettings()
+            return false
+        }
     }
     
     /// Open System Settings to Microphone pane

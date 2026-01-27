@@ -5,7 +5,7 @@ from loguru import logger
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
+# MARK: Audio config
 class AudioConfig(BaseModel):
     """Audio processing configuration."""
 
@@ -35,7 +35,7 @@ class AudioConfig(BaseModel):
             raise ValueError("Chunk size must be a power of 2")
         return v
 
-
+# MARK: VAD config
 class VADConfig(BaseModel):
     """Voice Activity Detection configuration."""
 
@@ -61,7 +61,7 @@ class VADConfig(BaseModel):
             raise ValueError(f"Frame duration must be one of: {valid_durations}ms")
         return v
 
-
+# MARK: Settings
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

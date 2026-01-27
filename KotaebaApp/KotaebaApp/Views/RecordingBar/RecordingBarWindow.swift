@@ -9,7 +9,6 @@ import SwiftUI
 class RecordingBarWindowController: NSObject {
     
     private var window: NSPanel?
-    private var hostingView: NSHostingView<RecordingBarView>?
     
     // MARK: - Initialization
     
@@ -57,13 +56,13 @@ class RecordingBarWindowController: NSObject {
         
         // Create SwiftUI view
         let contentView = RecordingBarView()
+            .environmentObject(AppStateManager.shared)
         let hostingView = NSHostingView(rootView: contentView)
         hostingView.frame = panel.contentView?.bounds ?? .zero
         
         panel.contentView = hostingView
         
         self.window = panel
-        self.hostingView = hostingView
     }
     
     // MARK: - Show/Hide

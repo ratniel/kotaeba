@@ -182,8 +182,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - First Run
     
     private func checkFirstRun() {
-        let setupCompleted = UserDefaults.standard.bool(forKey: Constants.Setup.setupCompletedKey)
-        if !setupCompleted {
+        let setupCompleted = SetupManager.isSetupComplete
+        let permissionsGranted = PermissionManager.checkAllPermissions()
+
+        if !setupCompleted || !permissionsGranted {
+            closeMainWindowIfNeeded()
             // Show onboarding window
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 self.openOnboarding()
@@ -207,12 +210,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     @objc private func openMainWindow() {
+        let setupCompleted = SetupManager.isSetupComplete
+        let permissionsGranted = PermissionManager.checkAllPermissions()
+        if !setupCompleted || !permissionsGranted {
+            closeMainWindowIfNeeded()
+            openOnboarding()
+            return
+        }
+
         NSApp.activate(ignoringOtherApps: true)
         if let window = NSApp.windows.first(where: { $0.identifier?.rawValue == "main" }) {
             window.makeKeyAndOrderFront(nil)
         } else {
             // Open via WindowGroup
-            NSApp.sendAction(Selector(("showWindow:")), to: nil, from: nil)
+            NSApp.sendAction(NSSelectorFromString(("showWindow:")), to: nil, from: nil)
         }
     }
     
@@ -228,6 +239,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         onboardingWindow.center()
         onboardingWindow.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func closeMainWindowIfNeeded() {
+        if let window = NSApp.windows.first(where: { $0.identifier?.rawValue == "main" }) {
+            window.close()
+        }
     }
     
     @objc private func quit() {

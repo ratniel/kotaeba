@@ -4,17 +4,17 @@ import SwiftUI
 ///
 /// Guides user through:
 /// 1. Welcome
-/// 2. Permission requests
+/// 2. Permission requests (system dialogs)
 /// 3. Dependency installation
 /// 4. Completion
 struct OnboardingView: View {
     @StateObject private var setupManager = SetupManager()
     @State private var currentStep: OnboardingStep = .welcome
     @State private var permissionStatus = PermissionManager.getPermissionStatus()
+    @State private var isRequestingPermissions = false
     
     enum OnboardingStep {
         case welcome
-        case permissions
         case setup
         case complete
     }
@@ -27,12 +27,40 @@ struct OnboardingView: View {
             VStack(spacing: 32) {
                 switch currentStep {
                 case .welcome:
-                    WelcomeStepView(onNext: { currentStep = .permissions })
-                    
-                case .permissions:
-                    PermissionsStepView(
-                        permissionStatus: $permissionStatus,
-                        onNext: { currentStep = .setup }
+                    WelcomeStepView(
+                        isRequestingPermissions: isRequestingPermissions,
+                        onNext: {
+                            if permissionStatus.allGranted {
+                                currentStep = .setup
+                                return
+                            }
+                            
+                            isRequestingPermissions = true
+                            Task { @MainActor in
+                                print("[Onboarding] Starting permission requests...")
+                                print("[Onboarding] Current status - Accessibility: \(permissionStatus.accessibility), Microphone: \(permissionStatus.microphone)")
+                                
+                                print("[Onboarding] Requesting Accessibility permission...")
+                                PermissionManager.requestAccessibilityPermission()
+                                
+                                print("[Onboarding] Requesting Microphone permission...")
+                                let micResult = await PermissionManager.requestMicrophonePermissionOrOpenSettings()
+                                print("[Onboarding] Microphone request returned: \(micResult)")
+                                
+                                permissionStatus = PermissionManager.getPermissionStatus()
+                                print("[Onboarding] After requests - Accessibility: \(permissionStatus.accessibility), Microphone: \(permissionStatus.microphone)")
+                                
+                                while !permissionStatus.allGranted {
+                                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                                    permissionStatus = PermissionManager.getPermissionStatus()
+                                    print("[Onboarding] Polling - Accessibility: \(permissionStatus.accessibility), Microphone: \(permissionStatus.microphone)")
+                                }
+                                
+                                print("[Onboarding] All permissions granted! Advancing to setup...")
+                                isRequestingPermissions = false
+                                currentStep = .setup
+                            }
+                        }
                     )
                     
                 case .setup:
@@ -54,6 +82,7 @@ struct OnboardingView: View {
 // MARK: - Welcome Step
 
 struct WelcomeStepView: View {
+    let isRequestingPermissions: Bool
     let onNext: () -> Void
     
     var body: some View {
@@ -85,7 +114,7 @@ struct WelcomeStepView: View {
             Spacer()
             
             Button(action: onNext) {
-                Text("Get Started")
+                Text(isRequestingPermissions ? "Requesting Permissions..." : "Get Started")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundColor(.white)
                     .frame(maxWidth: .infinity)
@@ -94,6 +123,7 @@ struct WelcomeStepView: View {
                     .cornerRadius(10)
             }
             .buttonStyle(.plain)
+            .disabled(isRequestingPermissions)
         }
     }
 }
@@ -112,120 +142,6 @@ struct FeatureRowView: View {
             Text(text)
                 .foregroundColor(Constants.UI.textPrimary)
         }
-    }
-}
-
-// MARK: - Permissions Step
-
-struct PermissionsStepView: View {
-    @Binding var permissionStatus: PermissionStatus
-    let onNext: () -> Void
-    
-    var body: some View {
-        VStack(spacing: 32) {
-            VStack(spacing: 12) {
-                Image(systemName: "hand.raised.fill")
-                    .font(.system(size: 48))
-                    .foregroundColor(Constants.UI.accentOrange)
-                
-                Text("Permissions Required")
-                    .font(.system(size: 28, weight: .bold))
-                    .foregroundColor(Constants.UI.textPrimary)
-                
-                Text("Kotaeba needs these permissions to work")
-                    .foregroundColor(Constants.UI.textSecondary)
-            }
-            
-            VStack(spacing: 16) {
-                PermissionRowView(
-                    icon: "mic.fill",
-                    title: "Microphone",
-                    description: "To capture your voice",
-                    isGranted: permissionStatus.microphone,
-                    onRequest: {
-                        Task {
-                            let granted = await PermissionManager.requestMicrophonePermission()
-                            permissionStatus = PermissionManager.getPermissionStatus()
-                        }
-                    }
-                )
-                
-                PermissionRowView(
-                    icon: "hand.point.up.left.fill",
-                    title: "Accessibility",
-                    description: "For global hotkeys and text insertion",
-                    isGranted: permissionStatus.accessibility,
-                    onRequest: {
-                        PermissionManager.requestAccessibilityPermission()
-                        // Poll for permission grant
-                        Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { timer in
-                            permissionStatus = PermissionManager.getPermissionStatus()
-                            if permissionStatus.accessibility {
-                                timer.invalidate()
-                            }
-                        }
-                    }
-                )
-            }
-            
-            Spacer()
-            
-            Button(action: onNext) {
-                Text("Continue")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .background(permissionStatus.allGranted ? Constants.UI.accentOrange : Color.gray)
-                    .cornerRadius(10)
-            }
-            .buttonStyle(.plain)
-            .disabled(!permissionStatus.allGranted)
-        }
-    }
-}
-
-struct PermissionRowView: View {
-    let icon: String
-    let title: String
-    let description: String
-    let isGranted: Bool
-    let onRequest: () -> Void
-    
-    var body: some View {
-        HStack(spacing: 16) {
-            Image(systemName: icon)
-                .font(.system(size: 24))
-                .foregroundColor(Constants.UI.accentOrange)
-                .frame(width: 32)
-            
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundColor(Constants.UI.textPrimary)
-                
-                Text(description)
-                    .font(.system(size: 13))
-                    .foregroundColor(Constants.UI.textSecondary)
-            }
-            
-            Spacer()
-            
-            if isGranted {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 24))
-                    .foregroundColor(Constants.UI.successGreen)
-            } else {
-                Button("Grant") {
-                    onRequest()
-                }
-                .buttonStyle(.plain)
-                .foregroundColor(Constants.UI.accentOrange)
-            }
-        }
-        .padding(16)
-        .background(Constants.UI.surfaceDark)
-        .cornerRadius(10)
     }
 }
 

@@ -76,7 +76,7 @@ enum Constants {
     
     // MARK: - Setup
     enum Setup {
-        static let venvPath = supportDirectory.appendingPathComponent("venv")
+        static let venvPath = supportDirectory.appendingPathComponent(".venv")
         static let setupCompletedKey = "setupCompleted"
         static let pythonPath = venvPath.appendingPathComponent("bin/python")
     }
