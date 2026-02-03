@@ -4,37 +4,59 @@ import SwiftUI
 ///
 /// Contains:
 /// - Server status and controls
+/// - Model selection
 /// - Recording mode selection
 /// - Statistics display
 /// - Quick access to settings
 struct MainWindowView: View {
     @EnvironmentObject var stateManager: AppStateManager
-    
+    @State private var showSettings = false
+
     var body: some View {
         ZStack {
-            // Background
-            Constants.UI.backgroundDark
-                .ignoresSafeArea()
-            
-            VStack(spacing: 24) {
-                // Header
-                HeaderView()
-                
-                // Server Control
-                ServerControlView()
-                
-                // Recording Mode
-                RecordingModeView()
-                
-                // Statistics
-                StatisticsView()
-                
-                Spacer()
-                
-                // Footer
-                FooterView()
+            // Modern gradient background
+            LinearGradient(
+                gradient: Gradient(colors: [
+                    Constants.UI.backgroundDark,
+                    Color(hex: "151517")
+                ]),
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 20) {
+                    // Header
+                    HeaderView()
+                        .padding(.top, 16)
+
+                    // Server Control Card
+                    ServerControlView()
+
+                    // Simple Test View with debug info
+                    SimpleTestView()
+
+                    // Model Selection
+                    if stateManager.state == .idle || stateManager.state == .serverRunning {
+                        ModelSelectionView()
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+
+                    // Recording Mode
+                    RecordingModeView()
+
+                    // Statistics - Compact
+                    StatisticsView()
+
+                    Spacer(minLength: 12)
+
+                    // Footer
+                    FooterView()
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 16)
             }
-            .padding(24)
         }
         .frame(width: Constants.UI.mainWindowWidth, height: Constants.UI.mainWindowHeight)
         .preferredColorScheme(.dark)
@@ -45,15 +67,37 @@ struct MainWindowView: View {
 
 struct HeaderView: View {
     var body: some View {
-        HStack {
-            Image(systemName: "mic.fill")
-                .font(.system(size: 32))
-                .foregroundColor(Constants.UI.accentOrange)
-            
-            Text("Kotaeba")
-                .font(.system(size: 28, weight: .bold))
-                .foregroundColor(Constants.UI.textPrimary)
-            
+        HStack(spacing: 12) {
+            // App icon with gradient
+            ZStack {
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            gradient: Gradient(colors: [
+                                Constants.UI.accentOrange,
+                                Constants.UI.accentOrange.opacity(0.7)
+                            ]),
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 44, height: 44)
+
+                Image(systemName: "waveform")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundColor(.white)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Kotaeba")
+                    .font(.system(size: 24, weight: .bold))
+                    .foregroundColor(Constants.UI.textPrimary)
+
+                Text("Voice-to-Text Assistant")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(Constants.UI.textSecondary)
+            }
+
             Spacer()
         }
     }
@@ -65,16 +109,30 @@ struct FooterView: View {
     var body: some View {
         HStack {
             Text("v\(Constants.appVersion)")
-                .font(.caption)
-                .foregroundColor(Constants.UI.textSecondary)
-            
+                .font(.caption2)
+                .foregroundColor(Constants.UI.textSecondary.opacity(0.6))
+
             Spacer()
-            
-            Button("Settings") {
+
+            Button(action: {
                 NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+            }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "gearshape.fill")
+                        .font(.system(size: 12))
+                    Text("Settings")
+                        .font(.system(size: 13, weight: .medium))
+                }
+                .foregroundColor(Constants.UI.textSecondary)
             }
             .buttonStyle(.plain)
-            .foregroundColor(Constants.UI.accentOrange)
+            .onHover { hovering in
+                if hovering {
+                    NSCursor.pointingHand.push()
+                } else {
+                    NSCursor.pop()
+                }
+            }
         }
     }
 }

@@ -13,13 +13,14 @@ enum Constants {
     // MARK: - Server
     enum Server {
         static let host = "localhost"
-        static let port = 8765
+        static let port = 8000  // Changed from 8765 to match mlx_audio.server default
         static let websocketPath = "/v1/audio/transcriptions/realtime"
         static var websocketURL: URL {
             URL(string: "ws://\(host):\(port)\(websocketPath)")!
         }
         static var healthURL: URL {
-            URL(string: "http://\(host):\(port)/health")!
+            // mlx_audio.server doesn't have /health endpoint, using root endpoint
+            URL(string: "http://\(host):\(port)/")!
         }
         static let healthCheckInterval: TimeInterval = 5.0
         static let startupTimeout: TimeInterval = 30.0
@@ -31,6 +32,35 @@ enum Constants {
         static let channels: UInt32 = 1
         static let bufferSize: UInt32 = 1600  // 100ms at 16kHz
         static let format = "pcmInt16"
+    }
+
+    // MARK: - Models
+    enum Models {
+        struct Model {
+            let name: String
+            let identifier: String
+            let description: String
+        }
+
+        static let availableModels: [Model] = [
+            Model(
+                name: "Parakeet-TDT-0.6B",
+                identifier: "mlx-community/parakeet-tdt-0.6b-v2",
+                description: "Fast, low memory (Default)"
+            ),
+            Model(
+                name: "Qwen3-ASR-0.6B",
+                identifier: "mlx-community/Qwen3-ASR-0.6B-8bit",
+                description: "Optimized 8-bit quantized"
+            ),
+            Model(
+                name: "Whisper Large V3 Turbo",
+                identifier: "mlx-community/whisper-large-v3-turbo",
+                description: "High quality, balanced"
+            )
+        ]
+
+        static let defaultModel = availableModels[0]
     }
     
     // MARK: - Hotkey
@@ -91,6 +121,7 @@ enum Constants {
         static let launchAtLogin = "launchAtLogin"
         static let useClipboardFallback = "useClipboardFallback"
         static let selectedAudioDevice = "selectedAudioDevice"
+        static let selectedModel = "selectedModel"
     }
 }
 
@@ -99,18 +130,54 @@ enum Constants {
 enum RecordingMode: String, CaseIterable, Codable {
     case hold = "hold"      // Push-to-talk: hold key to record
     case toggle = "toggle"  // Press to start, press again to stop
-    
+
     var displayName: String {
         switch self {
         case .hold: return "Hold to Record"
         case .toggle: return "Toggle Recording"
         }
     }
-    
+
     var description: String {
         switch self {
         case .hold: return "Hold the hotkey while speaking, release to stop"
         case .toggle: return "Press hotkey to start, press again to stop"
+        }
+    }
+}
+
+// MARK: - Model Download Status
+
+enum ModelDownloadStatus {
+    case unknown
+    case checking
+    case downloaded
+    case notDownloaded
+
+    var displayText: String {
+        switch self {
+        case .unknown: return "Unknown"
+        case .checking: return "Checking..."
+        case .downloaded: return "Downloaded"
+        case .notDownloaded: return "Not Downloaded"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .unknown: return "questionmark.circle"
+        case .checking: return "arrow.clockwise"
+        case .downloaded: return "checkmark.circle.fill"
+        case .notDownloaded: return "arrow.down.circle"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .unknown: return Constants.UI.textSecondary
+        case .checking: return Constants.UI.accentOrange
+        case .downloaded: return Constants.UI.successGreen
+        case .notDownloaded: return Constants.UI.textSecondary
         }
     }
 }

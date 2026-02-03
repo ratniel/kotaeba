@@ -121,26 +121,27 @@ class WebSocketClient: NSObject {
     private func handleMessage(_ message: URLSessionWebSocketTask.Message) {
         switch message {
         case .string(let text):
+            print("[WebSocket] 📨 Received message: \(text.prefix(200))")
             let serverMessage = ServerMessage(from: text)
             
             switch serverMessage {
             case .transcription(let transcription):
-                print("[WebSocket] Transcription: \"\(transcription.text)\" (partial: \(transcription.isPartial))")
+                print("[WebSocket] 🎯 Parsed transcription: \"\(transcription.text)\" (partial: \(transcription.isPartial))")
                 delegate?.webSocketDidReceiveTranscription(transcription)
                 
             case .status(let status):
-                print("[WebSocket] Status: \(status.status) - \(status.message)")
+                print("[WebSocket] ℹ️ Status: \(status.status) - \(status.message)")
                 delegate?.webSocketDidReceiveStatus(status)
                 
             case .unknown(let raw):
-                print("[WebSocket] Unknown message: \(raw.prefix(100))...")
+                print("[WebSocket] ❓ Unknown message format: \(raw.prefix(100))...")
             }
             
         case .data(let data):
-            print("[WebSocket] Received binary data: \(data.count) bytes")
+            print("[WebSocket] 📦 Received binary data: \(data.count) bytes")
             
         @unknown default:
-            print("[WebSocket] Unknown message type")
+            print("[WebSocket] ❓ Unknown message type")
         }
     }
 }

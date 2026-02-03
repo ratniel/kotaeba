@@ -50,13 +50,16 @@ struct AudioVisualizerView: View {
     
     /// Idle animation when no audio (subtle wave)
     private func startIdleAnimation() {
-        Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
-            guard stateManager.audioAmplitude < 0.1 else { return }
-            
-            for i in 0..<Constants.UI.visualizerBarCount {
-                let time = Date().timeIntervalSince1970
-                let wave = sin(time * 2.0 + Double(i) * 0.5) * 0.15 + 0.2
-                barHeights[i] = CGFloat(wave)
+        Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak stateManager] _ in
+            Task { @MainActor in
+                guard let stateManager = stateManager else { return }
+                guard stateManager.audioAmplitude < 0.1 else { return }
+
+                for i in 0..<Constants.UI.visualizerBarCount {
+                    let time = Date().timeIntervalSince1970
+                    let wave = sin(time * 2.0 + Double(i) * 0.5) * 0.15 + 0.2
+                    barHeights[i] = CGFloat(wave)
+                }
             }
         }
     }

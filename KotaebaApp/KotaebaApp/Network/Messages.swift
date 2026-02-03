@@ -22,13 +22,25 @@ struct ClientConfig: Codable {
     
     /// Default configuration for mlx-audio Whisper
     static let `default` = ClientConfig(
-        model: "mlx-community/whisper-large-v3-mlx",
+        model: Constants.Models.defaultModel.identifier,
         language: "en",
         sampleRate: Int(Constants.Audio.sampleRate),
         channels: Int(Constants.Audio.channels),
         vadEnabled: true,
         vadAggressiveness: 3
     )
+
+    /// Create configuration with specified model
+    static func with(model: String) -> ClientConfig {
+        ClientConfig(
+            model: model,
+            language: "en",
+            sampleRate: Int(Constants.Audio.sampleRate),
+            channels: Int(Constants.Audio.channels),
+            vadEnabled: true,
+            vadAggressiveness: 3
+        )
+    }
 }
 
 // MARK: - Server → Client Messages

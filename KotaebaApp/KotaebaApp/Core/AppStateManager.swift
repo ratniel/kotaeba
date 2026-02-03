@@ -22,6 +22,8 @@ class AppStateManager: ObservableObject {
     @Published private(set) var currentTranscription: String = ""
     @Published private(set) var audioAmplitude: Float = 0.0
     @Published var recordingMode: RecordingMode = .toggle
+    @Published var selectedModel: Constants.Models.Model = Constants.Models.defaultModel
+    @Published private(set) var modelDownloadStatus: ModelDownloadStatus = .unknown
     
     // MARK: - Components
     
@@ -38,16 +40,27 @@ class AppStateManager: ObservableObject {
     private var sessionWordCount: Int = 0
     
     // MARK: - Initialization
-    
+
     private init() {
         loadPreferences()
         setupComponents()
+
+        // Auto-start server on app launch for instant hotkey response
+        Task {
+            await autoStartServer()
+        }
     }
     
     private func loadPreferences() {
         if let modeString = UserDefaults.standard.string(forKey: Constants.UserDefaultsKeys.recordingMode),
            let mode = RecordingMode(rawValue: modeString) {
             recordingMode = mode
+        }
+
+        // Load selected model
+        if let modelId = UserDefaults.standard.string(forKey: Constants.UserDefaultsKeys.selectedModel),
+           let model = Constants.Models.availableModels.first(where: { $0.identifier == modelId }) {
+            selectedModel = model
         }
     }
     
@@ -76,16 +89,30 @@ class AppStateManager: ObservableObject {
     }
     
     // MARK: - Server Management
-    
+
+    /// Auto-start server on app launch if preferences allow
+    private func autoStartServer() async {
+        // Default to true if not explicitly set (first launch)
+        let hasPreference = UserDefaults.standard.object(forKey: Constants.UserDefaultsKeys.autoStartServer) != nil
+        let autoStart = UserDefaults.standard.bool(forKey: Constants.UserDefaultsKeys.autoStartServer)
+
+        if !hasPreference || autoStart {
+            print("[AppStateManager] Auto-starting server on launch...")
+            await checkModelDownloadStatus()
+            await startServer()
+        }
+    }
+
     func startServer() async {
         guard state == .idle || state == .error("") else { return }
-        
+
         state = .serverStarting
-        
+
         do {
-            try await serverManager?.start()
+            // Start server with selected model pre-loaded
+            try await serverManager?.start(model: selectedModel.identifier)
             state = .serverRunning
-            print("[AppStateManager] Server started successfully")
+            print("[AppStateManager] Server started successfully with model: \(selectedModel.name)")
         } catch {
             state = .error(error.localizedDescription)
             print("[AppStateManager] Server failed to start: \(error)")
@@ -159,7 +186,12 @@ class AppStateManager: ObservableObject {
     
     private func handleTranscription(_ text: String, isPartial: Bool) {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedText.isEmpty else { return }
+        guard !trimmedText.isEmpty else {
+            print("[AppStateManager] ⚠️ Received empty transcription, ignoring")
+            return
+        }
+        
+        print("[AppStateManager] 🎯 Received transcription: \"\(trimmedText)\" (partial: \(isPartial))")
         
         // Update displayed transcription
         currentTranscription = trimmedText
@@ -171,15 +203,51 @@ class AppStateManager: ObservableObject {
             let wordCount = trimmedText.split(separator: " ").count
             sessionWordCount += wordCount
             
-            // Insert text at cursor
-            textInserter?.insertText(trimmedText + " ")  // Add space after
+            print("[AppStateManager] 📝 Attempting to insert text: \"\(trimmedText)\" (\(wordCount) words)")
             
-            print("[AppStateManager] Inserted: \"\(trimmedText)\" (\(wordCount) words)")
+            // Insert text at cursor
+            if let inserter = textInserter {
+                inserter.insertText(trimmedText + " ")  // Add space after
+                print("[AppStateManager] ✅ Text insertion called successfully")
+            } else {
+                print("[AppStateManager] ❌ TextInserter is nil! Cannot insert text.")
+            }
+        } else {
+            print("[AppStateManager] ⏳ Partial transcription received, waiting for final...")
         }
     }
     
+    // MARK: - Model Management
+
+    func checkModelDownloadStatus() async {
+        modelDownloadStatus = .checking
+
+        do {
+            let isDownloaded = try await serverManager?.checkModelExists(selectedModel.identifier) ?? false
+            modelDownloadStatus = isDownloaded ? .downloaded : .notDownloaded
+        } catch {
+            print("[AppStateManager] Failed to check model status: \(error)")
+            modelDownloadStatus = .unknown
+        }
+    }
+
+    func setSelectedModel(_ model: Constants.Models.Model) async {
+        selectedModel = model
+        UserDefaults.standard.set(model.identifier, forKey: Constants.UserDefaultsKeys.selectedModel)
+
+        // Check if model is downloaded
+        await checkModelDownloadStatus()
+
+        // If server is running, restart with new model
+        if state == .serverRunning {
+            print("[AppStateManager] Restarting server with new model: \(model.name)")
+            stopServer()
+            await startServer()
+        }
+    }
+
     // MARK: - Preferences
-    
+
     func setRecordingMode(_ mode: RecordingMode) {
         recordingMode = mode
         hotkeyManager?.recordingMode = mode
@@ -202,18 +270,11 @@ extension AppStateManager: WebSocketClientDelegate {
     nonisolated func webSocketDidConnect() {
         Task { @MainActor in
             print("[AppStateManager] WebSocket connected, starting audio...")
-            
-            // Send configuration
-            let config = ClientConfig(
-                model: "mlx-community/whisper-large-v3-mlx",
-                language: "en",
-                sampleRate: Int(Constants.Audio.sampleRate),
-                channels: Int(Constants.Audio.channels),
-                vadEnabled: true,
-                vadAggressiveness: 3
-            )
+
+            // Send configuration with selected model
+            let config = ClientConfig.with(model: selectedModel.identifier)
             webSocketClient?.sendConfiguration(config)
-            
+
             // Start audio capture
             do {
                 try audioCapture?.startRecording()

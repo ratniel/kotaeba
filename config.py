@@ -67,7 +67,7 @@ class Settings(BaseSettings):
 
     # Server Configuration
     STT_MODEL: str = Field(
-        default="mlx-community/whisper-large-v3-mlx", description="Whisper model to use"
+        default="mlx-community/Qwen3-ASR-0.6B-8bit", description="Whisper model to use"
     )
     STT_HOST: str = Field(default="0.0.0.0", description="Server host")
     STT_PORT: int = Field(default=8000, ge=1, le=65535, description="Server port")

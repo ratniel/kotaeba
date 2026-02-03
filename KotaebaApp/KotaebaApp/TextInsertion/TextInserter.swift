@@ -1,6 +1,7 @@
 import Carbon
 import Cocoa
 import Foundation
+import ApplicationServices
 
 /// Inserts text at the current cursor position in any application
 ///
@@ -17,22 +18,29 @@ class TextInserter {
     
     /// Insert text at the current cursor position
     func insertText(_ text: String) {
-        guard !text.isEmpty else { return }
-        
-        guard PermissionManager.checkAccessibilityPermission() else {
-            print("[TextInserter] Accessibility permission required")
+        guard !text.isEmpty else {
+            print("[TextInserter] ⚠️ Attempted to insert empty text")
             return
         }
+        
+        guard AXIsProcessTrusted() else {
+            print("[TextInserter] ❌ Accessibility permission required")
+            return
+        }
+        
+        print("[TextInserter] 📝 Inserting text: \"\(text)\"")
+        print("[TextInserter] 🔍 Current app: \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "Unknown")")
         
         // Try primary method first
         if insertUsingUnicodeEvent(text) {
+            print("[TextInserter] ✅ Unicode event method succeeded")
             return
         }
         
-        // Fallback to clipboard if enabled
-        if useClipboardFallback {
-            insertUsingClipboard(text)
-        }
+        print("[TextInserter] ⚠️ Unicode event method failed, trying clipboard fallback...")
+        
+        // Fallback to clipboard method (always try, not just when enabled)
+        insertUsingClipboard(text)
     }
     
     // MARK: - Method 1: CGEvent Unicode (Preferred)
@@ -72,6 +80,8 @@ class TextInserter {
     /// Insert text using clipboard and simulated Cmd+V
     /// More compatible but temporarily modifies clipboard
     private func insertUsingClipboard(_ text: String) {
+        print("[TextInserter] 📋 Using clipboard fallback for: \"\(text)\"")
+        
         let pasteboard = NSPasteboard.general
         
         // Save current clipboard contents
@@ -79,7 +89,8 @@ class TextInserter {
         
         // Set our text to clipboard
         pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
+        let success = pasteboard.setString(text, forType: .string)
+        print("[TextInserter] 📋 Set clipboard contents: \(success ? "✅" : "❌")")
         
         // Simulate Cmd+V
         simulatePaste()
@@ -89,28 +100,45 @@ class TextInserter {
             if let previous = previousContents {
                 pasteboard.clearContents()
                 pasteboard.setString(previous, forType: .string)
+                print("[TextInserter] 📋 Restored previous clipboard")
             }
         }
     }
     
     /// Simulate Cmd+V keystroke
     private func simulatePaste() {
+        print("[TextInserter] ⌨️ Simulating Cmd+V paste...")
+        
         let source = CGEventSource(stateID: .hidSystemState)
         
         // Key code 9 = 'v'
         let vKeyCode: CGKeyCode = 9
         
+        // Small delay to ensure clipboard is set
+        usleep(50000)  // 50ms
+        
         // Key down with Command modifier
         if let keyDown = CGEvent(keyboardEventSource: source, virtualKey: vKeyCode, keyDown: true) {
             keyDown.flags = .maskCommand
             keyDown.post(tap: .cghidEventTap)
+            print("[TextInserter] ⌨️ Cmd+V keyDown posted")
+        } else {
+            print("[TextInserter] ❌ Failed to create keyDown event")
         }
+        
+        // Small delay between keydown and keyup
+        usleep(10000)  // 10ms
         
         // Key up
         if let keyUp = CGEvent(keyboardEventSource: source, virtualKey: vKeyCode, keyDown: false) {
             keyUp.flags = .maskCommand
             keyUp.post(tap: .cghidEventTap)
+            print("[TextInserter] ⌨️ Cmd+V keyUp posted")
+        } else {
+            print("[TextInserter] ❌ Failed to create keyUp event")
         }
+        
+        print("[TextInserter] ✅ Paste simulation complete")
     }
     
     // MARK: - Method 3: Character-by-character (Slowest, ASCII only)

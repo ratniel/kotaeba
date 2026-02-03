@@ -1,99 +1,85 @@
 import SwiftUI
 
-/// Recording mode selection view
+/// Recording mode selection with modern compact design
 struct RecordingModeView: View {
     @EnvironmentObject var stateManager: AppStateManager
-    
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            // Section Header
-            Text("Recording")
-                .font(.headline)
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Recording Mode")
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundColor(Constants.UI.textSecondary)
-            
-            VStack(spacing: 12) {
-                // Hotkey Display
-                HStack {
-                    Text("Hotkey:")
-                        .foregroundColor(Constants.UI.textSecondary)
-                    
-                    Text(Constants.Hotkey.defaultDisplayString)
-                        .font(.system(.body, design: .monospaced))
-                        .fontWeight(.medium)
-                        .foregroundColor(Constants.UI.accentOrange)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Constants.UI.surfaceDark)
-                        .cornerRadius(6)
-                    
-                    Spacer()
-                }
-                
-                Divider()
-                    .background(Constants.UI.surfaceDark)
-                
-                // Mode Selection
-                VStack(alignment: .leading, spacing: 12) {
-                    ForEach(RecordingMode.allCases, id: \.self) { mode in
-                        ModeOptionView(
-                            mode: mode,
-                            isSelected: stateManager.recordingMode == mode
-                        ) {
+                .textCase(.uppercase)
+                .tracking(0.5)
+
+            HStack(spacing: 10) {
+                ForEach(RecordingMode.allCases, id: \.self) { mode in
+                    ModeButton(mode: mode, isSelected: stateManager.recordingMode == mode) {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                             stateManager.setRecordingMode(mode)
                         }
                     }
                 }
             }
-            .padding(16)
-            .background(Constants.UI.surfaceDark)
-            .cornerRadius(12)
         }
     }
 }
 
-// MARK: - Mode Option
-
-struct ModeOptionView: View {
+struct ModeButton: View {
     let mode: RecordingMode
     let isSelected: Bool
     let action: () -> Void
-    
+
+    @State private var isHovering = false
+
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 12) {
-                // Radio Button
+            VStack(spacing: 8) {
+                // Icon
                 ZStack {
                     Circle()
-                        .strokeBorder(
-                            isSelected ? Constants.UI.accentOrange : Constants.UI.textSecondary,
-                            lineWidth: 2
-                        )
-                        .frame(width: 18, height: 18)
-                    
-                    if isSelected {
-                        Circle()
-                            .fill(Constants.UI.accentOrange)
-                            .frame(width: 10, height: 10)
-                    }
+                        .fill(isSelected ? Constants.UI.accentOrange.opacity(0.15) : Color.clear)
+                        .frame(width: 40, height: 40)
+
+                    Image(systemName: mode == .hold ? "hand.tap.fill" : "repeat")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(isSelected ? Constants.UI.accentOrange : Constants.UI.textSecondary)
                 }
-                
-                // Mode Info
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(mode.displayName)
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundColor(Constants.UI.textPrimary)
-                    
-                    Text(mode.description)
-                        .font(.system(size: 12))
-                        .foregroundColor(Constants.UI.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                
-                Spacer()
+
+                // Title
+                Text(mode == .hold ? "Hold" : "Toggle")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(isSelected ? Constants.UI.textPrimary : Constants.UI.textSecondary)
+
+                // Description
+                Text(mode == .hold ? "Press & hold" : "Click to toggle")
+                    .font(.system(size: 11))
+                    .foregroundColor(Constants.UI.textSecondary.opacity(0.8))
+                    .multilineTextAlignment(.center)
             }
-            .contentShape(Rectangle())
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .padding(.horizontal, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(isSelected ? Constants.UI.surfaceDark : Color.clear)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(
+                                isSelected ? Constants.UI.accentOrange.opacity(0.3) : Constants.UI.textSecondary.opacity(0.1),
+                                lineWidth: 1.5
+                            )
+                    )
+                    .shadow(color: isSelected ? Constants.UI.accentOrange.opacity(0.2) : Color.clear, radius: 8)
+            )
+            .scaleEffect(isHovering ? 1.02 : 1.0)
         }
         .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isHovering = hovering
+            }
+        }
     }
 }
 
