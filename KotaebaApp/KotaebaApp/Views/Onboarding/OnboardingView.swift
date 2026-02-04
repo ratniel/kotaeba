@@ -37,26 +37,26 @@ struct OnboardingView: View {
                             
                             isRequestingPermissions = true
                             Task { @MainActor in
-                                print("[Onboarding] Starting permission requests...")
-                                print("[Onboarding] Current status - Accessibility: \(permissionStatus.accessibility), Microphone: \(permissionStatus.microphone)")
+                                Log.ui.info("Starting permission requests")
+                                Log.ui.info("Current status - Accessibility: \(permissionStatus.accessibility), Microphone: \(permissionStatus.microphone)")
                                 
-                                print("[Onboarding] Requesting Accessibility permission...")
+                                Log.ui.info("Requesting Accessibility permission...")
                                 PermissionManager.requestAccessibilityPermission()
                                 
-                                print("[Onboarding] Requesting Microphone permission...")
+                                Log.ui.info("Requesting Microphone permission...")
                                 let micResult = await PermissionManager.requestMicrophonePermissionOrOpenSettings()
-                                print("[Onboarding] Microphone request returned: \(micResult)")
+                                Log.ui.info("Microphone request returned: \(micResult)")
                                 
                                 permissionStatus = PermissionManager.getPermissionStatus()
-                                print("[Onboarding] After requests - Accessibility: \(permissionStatus.accessibility), Microphone: \(permissionStatus.microphone)")
+                                Log.ui.info("After requests - Accessibility: \(permissionStatus.accessibility), Microphone: \(permissionStatus.microphone)")
                                 
                                 while !permissionStatus.allGranted {
                                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                                     permissionStatus = PermissionManager.getPermissionStatus()
-                                    print("[Onboarding] Polling - Accessibility: \(permissionStatus.accessibility), Microphone: \(permissionStatus.microphone)")
+                                    Log.ui.debug("Polling - Accessibility: \(permissionStatus.accessibility), Microphone: \(permissionStatus.microphone)")
                                 }
                                 
-                                print("[Onboarding] All permissions granted! Advancing to setup...")
+                                Log.ui.info("All permissions granted! Advancing to setup...")
                                 isRequestingPermissions = false
                                 currentStep = .setup
                             }
@@ -106,7 +106,7 @@ struct WelcomeStepView: View {
             Spacer()
             
             VStack(alignment: .leading, spacing: 16) {
-                FeatureRowView(icon: "bolt.fill", text: "Press Ctrl+X to dictate anywhere")
+                FeatureRowView(icon: "bolt.fill", text: "Hold Ctrl+X to dictate anywhere")
                 FeatureRowView(icon: "brain.head.profile", text: "Powered by Apple MLX Whisper")
                 FeatureRowView(icon: "lock.fill", text: "100% offline and private")
             }
@@ -265,7 +265,7 @@ struct CompleteStepView: View {
                 )
                 InstructionRowView(
                     number: 2,
-                    text: "Press Ctrl+X to begin recording"
+                    text: "Hold Ctrl+X to begin recording"
                 )
                 InstructionRowView(
                     number: 3,

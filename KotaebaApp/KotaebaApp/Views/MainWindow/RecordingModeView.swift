@@ -3,14 +3,17 @@ import SwiftUI
 /// Recording mode selection with modern compact design
 struct RecordingModeView: View {
     @EnvironmentObject var stateManager: AppStateManager
+    var showsHeader: Bool = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Recording Mode")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(Constants.UI.textSecondary)
-                .textCase(.uppercase)
-                .tracking(0.5)
+            if showsHeader {
+                Text("Recording Mode")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(Constants.UI.textSecondary)
+                    .textCase(.uppercase)
+                    .tracking(0.5)
+            }
 
             HStack(spacing: 10) {
                 ForEach(RecordingMode.allCases, id: \.self) { mode in

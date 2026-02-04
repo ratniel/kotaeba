@@ -64,7 +64,7 @@ class AudioCaptureManager {
         let inputNode = audioEngine.inputNode
         let inputFormat = inputNode.inputFormat(forBus: 0)
         
-        print("[AudioCapture] Input format: \(inputFormat.sampleRate)Hz, \(inputFormat.channelCount) channels")
+        Log.audio.info("Input format: \(inputFormat.sampleRate)Hz, \(inputFormat.channelCount) channels")
         
         // Create output format (16kHz, mono, Int16)
         guard let outputFormat = AVAudioFormat(
@@ -92,7 +92,7 @@ class AudioCaptureManager {
         try audioEngine.start()
         
         isRecording = true
-        print("[AudioCapture] Recording started")
+        Log.audio.info("Recording started")
     }
     
     /// Stop capturing audio
@@ -104,7 +104,7 @@ class AudioCaptureManager {
         audioEngine = nil
         
         isRecording = false
-        print("[AudioCapture] Recording stopped")
+        Log.audio.info("Recording stopped")
     }
     
     // MARK: - Audio Processing
@@ -137,7 +137,7 @@ class AudioCaptureManager {
         }
         
         guard status != .error, error == nil else {
-            print("[AudioCapture] Conversion error: \(error?.localizedDescription ?? "unknown")")
+            Log.audio.error("Conversion error: \(error?.localizedDescription ?? "unknown")")
             return
         }
         

@@ -42,11 +42,11 @@ class WebSocketClient: NSObject {
     /// Connect to the WebSocket server
     func connect() {
         guard webSocketTask == nil else {
-            print("[WebSocket] Already connected or connecting")
+            Log.websocket.debug("Already connected or connecting")
             return
         }
         
-        print("[WebSocket] Connecting to \(serverURL)...")
+        Log.websocket.info("Connecting to \(serverURL)...")
         webSocketTask = session.webSocketTask(with: serverURL)
         webSocketTask?.resume()
         
@@ -67,16 +67,16 @@ class WebSocketClient: NSObject {
     func sendConfiguration(_ config: ClientConfig) {
         guard let data = try? JSONEncoder().encode(config),
               let jsonString = String(data: data, encoding: .utf8) else {
-            print("[WebSocket] Failed to encode config")
+            Log.websocket.error("Failed to encode config")
             return
         }
         
         let message = URLSessionWebSocketTask.Message.string(jsonString)
         webSocketTask?.send(message) { error in
             if let error = error {
-                print("[WebSocket] Config send error: \(error)")
+                Log.websocket.error("Config send error: \(error)")
             } else {
-                print("[WebSocket] Config sent successfully")
+                Log.websocket.info("Config sent successfully")
             }
         }
     }
@@ -86,7 +86,7 @@ class WebSocketClient: NSObject {
         let message = URLSessionWebSocketTask.Message.data(data)
         webSocketTask?.send(message) { error in
             if let error = error {
-                print("[WebSocket] Audio send error: \(error)")
+                Log.websocket.error("Audio send error: \(error)")
             }
         }
     }
@@ -96,7 +96,7 @@ class WebSocketClient: NSObject {
         let message = URLSessionWebSocketTask.Message.string(text)
         webSocketTask?.send(message) { error in
             if let error = error {
-                print("[WebSocket] Text send error: \(error)")
+                Log.websocket.error("Text send error: \(error)")
             }
         }
     }
@@ -112,7 +112,7 @@ class WebSocketClient: NSObject {
                 self?.receiveMessage()
                 
             case .failure(let error):
-                print("[WebSocket] Receive error: \(error)")
+                Log.websocket.error("Receive error: \(error)")
                 self?.delegate?.webSocketDidDisconnect(error: error)
             }
         }
@@ -121,27 +121,27 @@ class WebSocketClient: NSObject {
     private func handleMessage(_ message: URLSessionWebSocketTask.Message) {
         switch message {
         case .string(let text):
-            print("[WebSocket] 📨 Received message: \(text.prefix(200))")
+            Log.websocket.debug("Received message: \(text.prefix(200))")
             let serverMessage = ServerMessage(from: text)
             
             switch serverMessage {
             case .transcription(let transcription):
-                print("[WebSocket] 🎯 Parsed transcription: \"\(transcription.text)\" (partial: \(transcription.isPartial))")
+                Log.websocket.debug("Parsed transcription: \"\(transcription.text)\" (partial: \(transcription.isPartial))")
                 delegate?.webSocketDidReceiveTranscription(transcription)
                 
             case .status(let status):
-                print("[WebSocket] ℹ️ Status: \(status.status) - \(status.message)")
+                Log.websocket.info("Status: \(status.status) - \(status.message)")
                 delegate?.webSocketDidReceiveStatus(status)
                 
             case .unknown(let raw):
-                print("[WebSocket] ❓ Unknown message format: \(raw.prefix(100))...")
+                Log.websocket.warning("Unknown message format: \(raw.prefix(100))...")
             }
             
         case .data(let data):
-            print("[WebSocket] 📦 Received binary data: \(data.count) bytes")
+            Log.websocket.debug("Received binary data: \(data.count) bytes")
             
         @unknown default:
-            print("[WebSocket] ❓ Unknown message type")
+            Log.websocket.warning("Unknown message type")
         }
     }
 }
@@ -151,21 +151,21 @@ class WebSocketClient: NSObject {
 extension WebSocketClient: URLSessionWebSocketDelegate {
     
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
-        print("[WebSocket] Connected!")
+        Log.websocket.info("Connected")
         isConnected = true
         delegate?.webSocketDidConnect()
     }
     
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
         let reasonString = reason.flatMap { String(data: $0, encoding: .utf8) } ?? "none"
-        print("[WebSocket] Disconnected with code: \(closeCode.rawValue), reason: \(reasonString)")
+        Log.websocket.info("Disconnected with code: \(closeCode.rawValue), reason: \(reasonString)")
         isConnected = false
         delegate?.webSocketDidDisconnect(error: nil)
     }
     
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         if let error = error {
-            print("[WebSocket] Task completed with error: \(error)")
+            Log.websocket.error("Task completed with error: \(error)")
             delegate?.webSocketDidDisconnect(error: error)
         }
     }

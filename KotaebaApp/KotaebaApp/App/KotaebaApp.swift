@@ -44,6 +44,7 @@ struct KotaebaApp: App {
         Settings {
             SettingsView()
                 .environmentObject(stateManager)
+                .frame(width: 520, height: 420)
         }
         .modelContainer(sharedModelContainer)
     }

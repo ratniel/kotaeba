@@ -153,7 +153,7 @@ struct EmptyStateView: View {
                 .font(.system(size: 32))
                 .foregroundColor(Constants.UI.textSecondary.opacity(0.3))
 
-            Text("Press Ctrl+X to start recording")
+            Text("Hold Ctrl+X to start recording")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(Constants.UI.textSecondary.opacity(0.6))
 

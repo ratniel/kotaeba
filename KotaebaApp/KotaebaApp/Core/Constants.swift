@@ -87,8 +87,8 @@ enum Constants {
         static let recordingBarPadding: CGFloat = 16
         
         // Main Window
-        static let mainWindowWidth: CGFloat = 480
-        static let mainWindowHeight: CGFloat = 600
+        static let mainWindowWidth: CGFloat = 760
+        static let mainWindowHeight: CGFloat = 640
         
         // Visualizer
         static let visualizerBarCount = 12
@@ -122,6 +122,7 @@ enum Constants {
         static let useClipboardFallback = "useClipboardFallback"
         static let selectedAudioDevice = "selectedAudioDevice"
         static let selectedModel = "selectedModel"
+        static let didAutoDownloadDefaultModel = "didAutoDownloadDefaultModel"
     }
 }
 
@@ -151,6 +152,7 @@ enum RecordingMode: String, CaseIterable, Codable {
 enum ModelDownloadStatus {
     case unknown
     case checking
+    case downloading
     case downloaded
     case notDownloaded
 
@@ -158,6 +160,7 @@ enum ModelDownloadStatus {
         switch self {
         case .unknown: return "Unknown"
         case .checking: return "Checking..."
+        case .downloading: return "Downloading..."
         case .downloaded: return "Downloaded"
         case .notDownloaded: return "Not Downloaded"
         }
@@ -167,6 +170,7 @@ enum ModelDownloadStatus {
         switch self {
         case .unknown: return "questionmark.circle"
         case .checking: return "arrow.clockwise"
+        case .downloading: return "arrow.down.circle.fill"
         case .downloaded: return "checkmark.circle.fill"
         case .notDownloaded: return "arrow.down.circle"
         }
@@ -176,6 +180,7 @@ enum ModelDownloadStatus {
         switch self {
         case .unknown: return Constants.UI.textSecondary
         case .checking: return Constants.UI.accentOrange
+        case .downloading: return Constants.UI.accentOrange
         case .downloaded: return Constants.UI.successGreen
         case .notDownloaded: return Constants.UI.textSecondary
         }

@@ -103,6 +103,10 @@ struct ServerControlView: View {
             .onHover { hovering in
                 isHovering = hovering
             }
+
+            if stateManager.state == .idle || stateManager.state == .serverRunning {
+                ModelSelectionView()
+            }
         }
         .onAppear {
             isHovering = stateManager.state == .recording

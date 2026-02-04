@@ -76,7 +76,67 @@ struct ModelSelectionView: View {
                 .cornerRadius(10)
             }
             .buttonStyle(.plain)
-            .disabled(stateManager.state == .serverStarting || stateManager.state == .connecting || stateManager.state == .recording)
+            .disabled(stateManager.state == .serverStarting || stateManager.state == .connecting || stateManager.state == .recording || stateManager.modelDownloadStatus == .downloading)
+
+            if stateManager.modelDownloadStatus == .downloading {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Text("Downloading \(stateManager.selectedModel.name)...")
+                            .font(.system(size: 12))
+                            .foregroundColor(Constants.UI.textSecondary)
+
+                        Spacer()
+
+                        if let progress = stateManager.modelDownloadProgress {
+                            Text("\(Int(progress * 100))%")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(Constants.UI.textSecondary.opacity(0.8))
+                        }
+                    }
+
+                    if let progress = stateManager.modelDownloadProgress {
+                        ProgressView(value: progress)
+                            .progressViewStyle(.linear)
+                            .tint(Constants.UI.accentOrange)
+                    } else {
+                        ProgressView()
+                            .progressViewStyle(.linear)
+                            .tint(Constants.UI.accentOrange)
+                    }
+                }
+            } else if stateManager.modelDownloadStatus == .notDownloaded || stateManager.modelDownloadStatus == .unknown {
+                HStack(spacing: 10) {
+                    Text(stateManager.modelDownloadStatus == .unknown ? "Model status unknown" : "Model not downloaded")
+                        .font(.system(size: 12))
+                        .foregroundColor(Constants.UI.textSecondary)
+
+                    Spacer()
+
+                    Button {
+                        Task {
+                            await stateManager.downloadSelectedModel()
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.down.circle.fill")
+                            Text("Download")
+                        }
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Constants.UI.accentOrange)
+                        .cornerRadius(6)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            if let error = stateManager.modelDownloadError, !error.isEmpty {
+                Text(error)
+                    .font(.system(size: 11))
+                    .foregroundColor(Constants.UI.recordingRed)
+            }
         }
         .task {
             // Check model status on appear

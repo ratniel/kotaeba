@@ -27,6 +27,16 @@ struct SimpleTestView: View {
                 Text(setupStatus)
                     .font(.system(size: 12))
                     .foregroundColor(Constants.UI.textSecondary.opacity(0.8))
+
+                if let error = stateManager.lastInsertionError {
+                    Text("Last insertion error: \(error)")
+                        .font(.system(size: 12))
+                        .foregroundColor(Constants.UI.recordingRed)
+                } else if let method = stateManager.lastInsertionMethod {
+                    Text("Last insertion: \(method)")
+                        .font(.system(size: 12))
+                        .foregroundColor(Constants.UI.textSecondary.opacity(0.8))
+                }
             }
             .padding(12)
             .background(Constants.UI.surfaceDark)
@@ -64,7 +74,7 @@ struct SimpleTestView: View {
                     )
 
                 if transcribedText.isEmpty {
-                    Text("Press Ctrl+X to record. Text will appear here.")
+                    Text("Hold Ctrl+X to record. Text will appear here.")
                         .font(.system(size: 11))
                         .foregroundColor(Constants.UI.textSecondary.opacity(0.6))
                         .padding(.top, -90)
@@ -130,7 +140,6 @@ struct SimpleTestView: View {
     private func checkStatus() {
         let setupComplete = SetupManager.isSetupComplete
         let permissions = PermissionManager.getPermissionStatus()
-        let hotkeyInitialized = "hotkey initialized" // We can't actually check this easily
 
         setupStatus = """
         Setup: \(setupComplete ? "✅" : "❌ NOT COMPLETE")
@@ -141,9 +150,8 @@ struct SimpleTestView: View {
     }
     
     private func testTextInsertion() {
-        print("[SimpleTestView] Testing text insertion...")
-        let inserter = TextInserter()
-        inserter.insertText("Test insertion ")
+        Log.ui.info("Testing text insertion...")
+        stateManager.testInsertion("Test insertion ")
     }
 }
 

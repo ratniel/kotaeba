@@ -27,7 +27,7 @@ class StatisticsManager {
                 modelContext = ModelContext(container)
             }
         } catch {
-            print("[StatisticsManager] Failed to setup model container: \(error)")
+            Log.stats.error("Failed to setup model container: \(error)")
         }
     }
     
@@ -36,7 +36,7 @@ class StatisticsManager {
     /// Record a completed transcription session
     func recordSession(wordCount: Int, duration: TimeInterval, text: String? = nil, language: String = "en") {
         guard let context = modelContext else {
-            print("[StatisticsManager] Model context not available")
+            Log.stats.error("Model context not available")
             return
         }
         
@@ -53,9 +53,9 @@ class StatisticsManager {
         
         do {
             try context.save()
-            print("[StatisticsManager] Session recorded: \(wordCount) words, \(Int(duration))s")
+            Log.stats.info("Session recorded: \(wordCount) words, \(Int(duration))s")
         } catch {
-            print("[StatisticsManager] Failed to save session: \(error)")
+            Log.stats.error("Failed to save session: \(error)")
         }
     }
     
@@ -80,7 +80,7 @@ class StatisticsManager {
                 sessionCount: sessions.count
             )
         } catch {
-            print("[StatisticsManager] Failed to fetch sessions: \(error)")
+            Log.stats.error("Failed to fetch sessions: \(error)")
             return .empty
         }
     }
@@ -110,7 +110,7 @@ class StatisticsManager {
                 sessionCount: sessions.count
             )
         } catch {
-            print("[StatisticsManager] Failed to fetch today's sessions: \(error)")
+            Log.stats.error("Failed to fetch today's sessions: \(error)")
             return .empty
         }
     }
@@ -137,7 +137,7 @@ class StatisticsManager {
                 sessionCount: sessions.count
             )
         } catch {
-            print("[StatisticsManager] Failed to fetch sessions for range: \(error)")
+            Log.stats.error("Failed to fetch sessions for range: \(error)")
             return .empty
         }
     }
@@ -155,7 +155,7 @@ class StatisticsManager {
             descriptor.fetchLimit = limit
             return try context.fetch(descriptor)
         } catch {
-            print("[StatisticsManager] Failed to fetch recent sessions: \(error)")
+            Log.stats.error("Failed to fetch recent sessions: \(error)")
             return []
         }
     }
@@ -169,9 +169,9 @@ class StatisticsManager {
         do {
             try context.delete(model: TranscriptionSession.self)
             try context.save()
-            print("[StatisticsManager] All data cleared")
+            Log.stats.info("All data cleared")
         } catch {
-            print("[StatisticsManager] Failed to clear data: \(error)")
+            Log.stats.error("Failed to clear data: \(error)")
         }
     }
 }

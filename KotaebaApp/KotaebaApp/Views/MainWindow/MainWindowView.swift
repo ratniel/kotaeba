@@ -1,20 +1,65 @@
 import SwiftUI
 
-/// Main application window
-///
-/// Contains:
-/// - Server status and controls
-/// - Model selection
-/// - Recording mode selection
-/// - Statistics display
-/// - Quick access to settings
+/// Main application window with sidebar navigation
 struct MainWindowView: View {
-    @EnvironmentObject var stateManager: AppStateManager
-    @State private var showSettings = false
+    @State private var selection: SidebarItem? = .home
+
+    var body: some View {
+        NavigationSplitView {
+            List(SidebarItem.allCases, selection: $selection) { item in
+                Label(item.title, systemImage: item.systemImage)
+                    .tag(item)
+            }
+            .listStyle(.sidebar)
+            .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
+        } detail: {
+            switch selection ?? .home {
+            case .home:
+                HomeDashboardView()
+            case .testApp:
+                TestAppView()
+            case .settings:
+                SettingsDetailView()
+            }
+        }
+        .frame(width: Constants.UI.mainWindowWidth, height: Constants.UI.mainWindowHeight)
+        .preferredColorScheme(.dark)
+    }
+}
+
+// MARK: - Sidebar
+
+enum SidebarItem: String, CaseIterable, Identifiable {
+    case home = "Home"
+    case testApp = "Test App"
+    case settings = "Settings"
+
+    var id: String { rawValue }
+
+    var title: String {
+        rawValue
+    }
+
+    var systemImage: String {
+        switch self {
+        case .home: return "house.fill"
+        case .testApp: return "hammer.fill"
+        case .settings: return "gearshape.fill"
+        }
+    }
+}
+
+// MARK: - Background Wrapper
+
+struct AppBackground<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
 
     var body: some View {
         ZStack {
-            // Modern gradient background
             LinearGradient(
                 gradient: Gradient(colors: [
                     Constants.UI.backgroundDark,
@@ -25,41 +70,70 @@ struct MainWindowView: View {
             )
             .ignoresSafeArea()
 
+            content
+        }
+    }
+}
+
+// MARK: - Home
+
+struct HomeDashboardView: View {
+    var body: some View {
+        AppBackground {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 20) {
-                    // Header
                     HeaderView()
                         .padding(.top, 16)
 
-                    // Server Control Card
                     ServerControlView()
 
-                    // Simple Test View with debug info
-                    SimpleTestView()
-
-                    // Model Selection
-                    if stateManager.state == .idle || stateManager.state == .serverRunning {
-                        ModelSelectionView()
-                            .transition(.move(edge: .top).combined(with: .opacity))
-                    }
-
-                    // Recording Mode
-                    RecordingModeView()
-
-                    // Statistics - Compact
                     StatisticsView()
 
                     Spacer(minLength: 12)
 
-                    // Footer
                     FooterView()
                 }
                 .padding(.horizontal, 20)
                 .padding(.bottom, 16)
             }
         }
-        .frame(width: Constants.UI.mainWindowWidth, height: Constants.UI.mainWindowHeight)
-        .preferredColorScheme(.dark)
+    }
+}
+
+// MARK: - Test App
+
+struct TestAppView: View {
+    var body: some View {
+        AppBackground {
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Test App")
+                        .font(.system(size: 20, weight: .bold))
+                        .foregroundColor(Constants.UI.textPrimary)
+                        .padding(.top, 16)
+
+                    PermissionStatusView()
+                    SimpleTestView()
+                    TranscriptionTestView()
+
+                    Spacer(minLength: 12)
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 16)
+            }
+        }
+    }
+}
+
+// MARK: - Settings Detail
+
+struct SettingsDetailView: View {
+    var body: some View {
+        AppBackground {
+            SettingsView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(16)
+        }
     }
 }
 
@@ -68,7 +142,6 @@ struct MainWindowView: View {
 struct HeaderView: View {
     var body: some View {
         HStack(spacing: 12) {
-            // App icon with gradient
             ZStack {
                 Circle()
                     .fill(
@@ -114,9 +187,7 @@ struct FooterView: View {
 
             Spacer()
 
-            Button(action: {
-                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-            }) {
+            SettingsLink {
                 HStack(spacing: 6) {
                     Image(systemName: "gearshape.fill")
                         .font(.system(size: 12))
@@ -126,13 +197,6 @@ struct FooterView: View {
                 .foregroundColor(Constants.UI.textSecondary)
             }
             .buttonStyle(.plain)
-            .onHover { hovering in
-                if hovering {
-                    NSCursor.pointingHand.push()
-                } else {
-                    NSCursor.pop()
-                }
-            }
         }
     }
 }

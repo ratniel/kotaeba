@@ -75,9 +75,9 @@ class SetupManager: ObservableObject {
             await updateStep(.installingDeps)
             try await installDependencies()
             
-            // Step 4: Pre-download models (optional, can be done on first use)
-            // await updateStep(.downloadingModels)
-            // try await downloadModels()
+            // Step 4: Pre-download default model for a smoother first run
+            await updateStep(.downloadingModels)
+            try await downloadModels()
             
             // Mark setup complete
             await updateStep(.complete)
@@ -119,7 +119,9 @@ class SetupManager: ObservableObject {
         let script = """
         curl -LsSf https://astral.sh/uv/install.sh | sh
         """
-        try await runShellCommand(script)
+        try await ShellCommandRunner.run(script) { output in
+            Log.setup.info(output)
+        }
     }
     
     private func createVirtualEnvironment() async throws {
@@ -131,7 +133,9 @@ class SetupManager: ObservableObject {
         cd "\(supportPath)"
         \(uvPath) venv --python 3.11
         """
-        try await runShellCommand(script)
+        try await ShellCommandRunner.run(script) { output in
+            Log.setup.info(output)
+        }
     }
 
     private func installDependencies() async throws {
@@ -148,7 +152,9 @@ class SetupManager: ObservableObject {
         # Install dependencies
         \(uvPath) add mlx-audio mlx fastapi uvicorn websockets
         """
-        try await runShellCommand(script)
+        try await ShellCommandRunner.run(script) { output in
+            Log.setup.info(output)
+        }
     }
     
     private func downloadModels() async throws {
@@ -158,9 +164,11 @@ class SetupManager: ObservableObject {
         let script = """
         export PATH="$HOME/.local/bin:$PATH"
         cd "\(supportPath)"
-        \(uvPath) run python -c "from mlx_audio.stt import STT; STT()"
+        \(uvPath) run python -c "from mlx_audio.utils import load_model; load_model('\(Constants.Models.defaultModel.identifier)')"
         """
-        try await runShellCommand(script)
+        try await ShellCommandRunner.run(script) { output in
+            Log.setup.info(output)
+        }
     }
     
     private func findUVPath() -> String? {
@@ -172,61 +180,4 @@ class SetupManager: ObservableObject {
         return paths.first { FileManager.default.fileExists(atPath: $0) }
     }
     
-    private func runShellCommand(_ command: String) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/bin/bash")
-            process.arguments = ["-c", command]
-            
-            let outputPipe = Pipe()
-            let errorPipe = Pipe()
-            process.standardOutput = outputPipe
-            process.standardError = errorPipe
-            
-            // Log output
-            outputPipe.fileHandleForReading.readabilityHandler = { handle in
-                if let output = String(data: handle.availableData, encoding: .utf8), !output.isEmpty {
-                    print("[Setup] \(output)", terminator: "")
-                }
-            }
-            
-            process.terminationHandler = { process in
-                outputPipe.fileHandleForReading.readabilityHandler = nil
-                
-                if process.terminationStatus == 0 {
-                    continuation.resume()
-                } else {
-                    let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-                    let errorMessage = String(data: errorData, encoding: .utf8) ?? "Unknown error"
-                    continuation.resume(throwing: SetupError.commandFailed(errorMessage))
-                }
-            }
-            
-            do {
-                try process.run()
-            } catch {
-                continuation.resume(throwing: error)
-            }
-        }
-    }
 }
-
-// MARK: - Setup Errors
-
-enum SetupError: LocalizedError {
-    case commandFailed(String)
-    case uvNotFound
-    case venvCreationFailed
-    
-    var errorDescription: String? {
-        switch self {
-        case .commandFailed(let message):
-            return "Setup command failed: \(message)"
-        case .uvNotFound:
-            return "uv package manager not found after installation"
-        case .venvCreationFailed:
-            return "Failed to create Python virtual environment"
-        }
-    }
-}
-

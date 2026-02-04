@@ -6,8 +6,19 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXContainerItemProxy section */
+		911C170A2F30000000205399 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 911C15ED2F1598E500205399 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 911C15F42F1598E500205399;
+			remoteInfo = KotaebaApp;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		911C15F52F1598E500205399 /* KotaebaApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = KotaebaApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		911C17002F30000000205399 /* KotaebaAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = KotaebaAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -29,10 +40,22 @@
 			path = KotaebaApp;
 			sourceTree = "<group>";
 		};
+		911C17012F30000000205399 /* KotaebaAppTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = KotaebaAppTests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		911C15F22F1598E500205399 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		911C17032F30000000205399 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -46,6 +69,7 @@
 			isa = PBXGroup;
 			children = (
 				911C15F72F1598E500205399 /* KotaebaApp */,
+				911C17012F30000000205399 /* KotaebaAppTests */,
 				911C15F62F1598E500205399 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -54,6 +78,7 @@
 			isa = PBXGroup;
 			children = (
 				911C15F52F1598E500205399 /* KotaebaApp.app */,
+				911C17002F30000000205399 /* KotaebaAppTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -83,6 +108,27 @@
 			productReference = 911C15F52F1598E500205399 /* KotaebaApp.app */;
 			productType = "com.apple.product-type.application";
 		};
+		911C17052F30000000205399 /* KotaebaAppTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 911C17062F30000000205399 /* Build configuration list for PBXNativeTarget "KotaebaAppTests" */;
+			buildPhases = (
+				911C17022F30000000205399 /* Sources */,
+				911C17032F30000000205399 /* Frameworks */,
+				911C17042F30000000205399 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				911C17092F30000000205399 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				911C17012F30000000205399 /* KotaebaAppTests */,
+			);
+			name = KotaebaAppTests;
+			productName = KotaebaAppTests;
+			productReference = 911C17002F30000000205399 /* KotaebaAppTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -94,6 +140,9 @@
 				LastUpgradeCheck = 2620;
 				TargetAttributes = {
 					911C15F42F1598E500205399 = {
+						CreatedOnToolsVersion = 26.2;
+					};
+					911C17052F30000000205399 = {
 						CreatedOnToolsVersion = 26.2;
 					};
 				};
@@ -113,12 +162,20 @@
 			projectRoot = "";
 			targets = (
 				911C15F42F1598E500205399 /* KotaebaApp */,
+				911C17052F30000000205399 /* KotaebaAppTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		911C15F32F1598E500205399 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		911C17042F30000000205399 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -135,7 +192,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		911C17022F30000000205399 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		911C17092F30000000205399 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 911C15F42F1598E500205399 /* KotaebaApp */;
+			targetProxy = 911C170A2F30000000205399 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		911C15FE2F1598E500205399 /* Debug */ = {
@@ -279,7 +351,7 @@
 				ENABLE_RESOURCE_ACCESS_PHOTO_LIBRARY = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = KotaebaApp/Info.plist;
-				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_LSUIElement = NO;
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Kotaeba needs accessibility access to detect the global hotkey (Ctrl+X) and insert text.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Kotaeba needs microphone access to record your voice for transcription.";
@@ -327,7 +399,7 @@
 				ENABLE_RESOURCE_ACCESS_PHOTO_LIBRARY = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = KotaebaApp/Info.plist;
-				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_LSUIElement = NO;
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Kotaeba needs accessibility access to detect the global hotkey (Ctrl+X) and insert text.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Kotaeba needs microphone access to record your voice for transcription.";
@@ -354,6 +426,58 @@
 			};
 			name = Release;
 		};
+		911C17072F30000000205399 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 5VLX6T53XS;
+				ENABLE_TESTABILITY = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ratniel.KotaebaAppTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/KotaebaApp.app/Contents/MacOS/KotaebaApp";
+			};
+			name = Debug;
+		};
+		911C17082F30000000205399 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 5VLX6T53XS;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ratniel.KotaebaAppTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/KotaebaApp.app/Contents/MacOS/KotaebaApp";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -371,6 +495,15 @@
 			buildConfigurations = (
 				911C16012F1598E500205399 /* Debug */,
 				911C16022F1598E500205399 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		911C17062F30000000205399 /* Build configuration list for PBXNativeTarget "KotaebaAppTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				911C17072F30000000205399 /* Debug */,
+				911C17082F30000000205399 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

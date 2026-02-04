@@ -22,11 +22,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupMenubar()
         setupRecordingBar()
         observeStateChanges()
+        observeWindowVisibility()
         checkFirstRun()
+        setDockVisible(false)
+        Log.app.info("App logs at \(Constants.supportDirectory.appendingPathComponent("logs/kotaeba.log").path)")
         
-        // Hide dock icon (menubar app behavior)
-        // Note: Also set LSUIElement = YES in Info.plist for production
-        // For development, we keep the dock icon for easier debugging
+        // Dock icon visibility is toggled based on whether a standard window is open.
     }
     
     func applicationWillTerminate(_ notification: Notification) {
@@ -218,6 +219,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        setDockVisible(true)
         NSApp.activate(ignoringOtherApps: true)
         if let window = NSApp.windows.first(where: { $0.identifier?.rawValue == "main" }) {
             window.makeKeyAndOrderFront(nil)
@@ -228,6 +230,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     @objc private func openOnboarding() {
+        setDockVisible(true)
         let onboardingWindow = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 500, height: 400),
             styleMask: [.titled, .closable],
@@ -249,5 +252,55 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     @objc private func quit() {
         NSApplication.shared.terminate(nil)
+    }
+
+    // MARK: - Dock Visibility
+
+    private func observeWindowVisibility() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowWillClose(_:)),
+            name: NSWindow.willCloseNotification,
+            object: nil
+        )
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowDidBecomeKey(_:)),
+            name: NSWindow.didBecomeKeyNotification,
+            object: nil
+        )
+    }
+
+    @objc private func windowWillClose(_ notification: Notification) {
+        DispatchQueue.main.async { [weak self] in
+            self?.updateDockVisibility()
+        }
+    }
+
+    @objc private func windowDidBecomeKey(_ notification: Notification) {
+        updateDockVisibility()
+    }
+
+    private func updateDockVisibility() {
+        let hasVisibleStandardWindow = NSApp.windows.contains { window in
+            guard window.isVisible else { return false }
+            return isStandardAppWindow(window)
+        }
+        setDockVisible(hasVisibleStandardWindow)
+    }
+
+    private func isStandardAppWindow(_ window: NSWindow) -> Bool {
+        if window is NSPanel {
+            return false
+        }
+        return window.styleMask.contains(.titled)
+    }
+
+    private func setDockVisible(_ visible: Bool) {
+        let policy: NSApplication.ActivationPolicy = visible ? .regular : .accessory
+        if NSApp.activationPolicy() != policy {
+            NSApp.setActivationPolicy(policy)
+        }
     }
 }

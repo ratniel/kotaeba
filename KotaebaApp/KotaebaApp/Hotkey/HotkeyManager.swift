@@ -23,7 +23,7 @@ class HotkeyManager {
     
     weak var delegate: HotkeyManagerDelegate?
     
-    var recordingMode: RecordingMode = .toggle
+    var recordingMode: RecordingMode = .hold
     
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
@@ -45,7 +45,7 @@ class HotkeyManager {
     /// Returns true if successful, false if permissions are missing
     func start() -> Bool {
         guard PermissionManager.checkAccessibilityPermission() else {
-            print("[HotkeyManager] Accessibility permission not granted")
+            Log.hotkey.error("Accessibility permission not granted")
             PermissionManager.requestAccessibilityPermission()
             return false
         }
@@ -72,7 +72,7 @@ class HotkeyManager {
             },
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
-            print("[HotkeyManager] Failed to create event tap")
+            Log.hotkey.error("Failed to create event tap")
             return false
         }
         
@@ -81,7 +81,7 @@ class HotkeyManager {
         CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
         
-        print("[HotkeyManager] Event tap started - listening for Ctrl+X")
+        Log.hotkey.info("Event tap started - listening for Ctrl+X")
         return true
     }
     
@@ -95,7 +95,7 @@ class HotkeyManager {
         }
         eventTap = nil
         runLoopSource = nil
-        print("[HotkeyManager] Event tap stopped")
+        Log.hotkey.info("Event tap stopped")
     }
     
     /// Update the hotkey configuration
@@ -146,7 +146,7 @@ class HotkeyManager {
         guard !isHotkeyPressed else { return }
         isHotkeyPressed = true
         
-        print("[HotkeyManager] Key down (mode: \(recordingMode))")
+        Log.hotkey.debug("Key down (mode: \(recordingMode))")
         
         switch recordingMode {
         case .hold:
@@ -165,7 +165,7 @@ class HotkeyManager {
         guard isHotkeyPressed else { return }
         isHotkeyPressed = false
         
-        print("[HotkeyManager] Key up (mode: \(recordingMode))")
+        Log.hotkey.debug("Key up (mode: \(recordingMode))")
         
         switch recordingMode {
         case .hold:

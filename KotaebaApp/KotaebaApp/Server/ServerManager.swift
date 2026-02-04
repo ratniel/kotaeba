@@ -68,7 +68,7 @@ class ServerManager {
         outputPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if let output = String(data: data, encoding: .utf8), !output.isEmpty {
-                print("[Server] \(output)", terminator: "")
+                Log.server.info(output.trimmingCharacters(in: .whitespacesAndNewlines))
             }
         }
 
@@ -79,7 +79,7 @@ class ServerManager {
         do {
             try process.run()
             isRunning = true
-            print("[ServerManager] Server process started, will load model '\(model)' on first connection (PID: \(process.processIdentifier))")
+            Log.server.info("Server process started, will load model '\(model)' on first connection (PID: \(process.processIdentifier))")
         } catch {
             throw ServerError.failedToStart(error.localizedDescription)
         }
@@ -113,7 +113,7 @@ class ServerManager {
         }
         
         isRunning = false
-        print("[ServerManager] Server stopped")
+        Log.server.info("Server stopped")
     }
     
     private func cleanup() {
@@ -130,7 +130,7 @@ class ServerManager {
         
         while Date().timeIntervalSince(startTime) < timeout {
             if await checkHealth() {
-                print("[ServerManager] Server is ready")
+                Log.server.info("Server is ready")
                 return
             }
             try await Task.sleep(nanoseconds: 500_000_000)  // 0.5 seconds
@@ -143,7 +143,7 @@ class ServerManager {
         healthCheckTimer = Timer.scheduledTimer(withTimeInterval: Constants.Server.healthCheckInterval, repeats: true) { [weak self] _ in
             Task {
                 if await self?.checkHealth() == false {
-                    print("[ServerManager] Health check failed")
+                    Log.server.warning("Health check failed")
                     await MainActor.run {
                         self?.isRunning = false
                     }
@@ -184,6 +184,39 @@ class ServerManager {
         let fullPath = cacheDir.appendingPathComponent(modelPath)
 
         return FileManager.default.fileExists(atPath: fullPath.path)
+    }
+
+    /// Download and cache a model using the existing Python environment
+    func downloadModel(_ modelIdentifier: String, progressHandler: ((Double) -> Void)? = nil) async throws {
+        guard FileManager.default.fileExists(atPath: Constants.Setup.pythonPath.path) else {
+            throw ServerError.setupRequired
+        }
+
+        let command = """
+        source "\(Constants.Setup.venvPath.path)/bin/activate" && \
+        python -c "from mlx_audio.utils import load_model; load_model('\(modelIdentifier)')"
+        """
+
+        var lastProgress: Double = 0
+        let percentRegex = try? NSRegularExpression(pattern: "(\\d{1,3})(?:\\.\\d+)?%")
+
+        try await ShellCommandRunner.run(command, currentDirectory: Constants.supportDirectory) { output in
+            Log.server.info(output)
+
+            guard let percentRegex else { return }
+            let range = NSRange(output.startIndex..<output.endIndex, in: output)
+            let matches = percentRegex.matches(in: output, range: range)
+            guard let match = matches.last, match.numberOfRanges >= 2,
+                  let percentRange = Range(match.range(at: 1), in: output),
+                  let percentValue = Double(output[percentRange]) else { return }
+
+            let clamped = max(0, min(100, percentValue))
+            let progress = clamped / 100.0
+            if progress > lastProgress {
+                lastProgress = progress
+                progressHandler?(progress)
+            }
+        }
     }
 }
 

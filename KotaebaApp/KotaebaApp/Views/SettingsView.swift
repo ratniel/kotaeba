@@ -36,7 +36,6 @@ struct SettingsView: View {
                     Label("About", systemImage: "info.circle")
                 }
         }
-        .frame(width: 500, height: 400)
         .preferredColorScheme(.dark)
     }
 }
@@ -78,7 +77,7 @@ struct GeneralSettingsView: View {
     private func setLaunchAtLogin(_ enabled: Bool) {
         // TODO: Implement launch at login using SMLoginItemSetEnabled
         // This requires additional setup with a helper app
-        print("Launch at login: \(enabled)")
+        Log.ui.info("Launch at login: \(enabled)")
     }
 }
 
@@ -109,14 +108,7 @@ struct HotkeySettingsView: View {
             }
             
             Section {
-                Picker("Recording Mode", selection: .constant(stateManager.recordingMode)) {
-                    ForEach(RecordingMode.allCases, id: \.self) { mode in
-                        Text(mode.displayName).tag(mode)
-                    }
-                }
-                .onChange(of: stateManager.recordingMode) { _, newMode in
-                    stateManager.setRecordingMode(newMode)
-                }
+                RecordingModeView(showsHeader: false)
                 
                 Text(stateManager.recordingMode.description)
                     .font(.caption)

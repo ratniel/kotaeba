@@ -21,9 +21,13 @@ class AppStateManager: ObservableObject {
     @Published private(set) var state: AppState = .idle
     @Published private(set) var currentTranscription: String = ""
     @Published private(set) var audioAmplitude: Float = 0.0
-    @Published var recordingMode: RecordingMode = .toggle
+    @Published private(set) var lastInsertionError: String?
+    @Published private(set) var lastInsertionMethod: String?
+    @Published var recordingMode: RecordingMode = .hold
     @Published var selectedModel: Constants.Models.Model = Constants.Models.defaultModel
     @Published private(set) var modelDownloadStatus: ModelDownloadStatus = .unknown
+    @Published private(set) var modelDownloadError: String?
+    @Published private(set) var modelDownloadProgress: Double?
     
     // MARK: - Components
     
@@ -82,9 +86,9 @@ class AppStateManager: ObservableObject {
         hotkeyManager?.recordingMode = recordingMode
         
         if hotkeyManager?.start() == true {
-            print("[AppStateManager] Hotkey manager started")
+            Log.hotkey.info("Hotkey manager started")
         } else {
-            print("[AppStateManager] Failed to start hotkey manager - check Accessibility permissions")
+            Log.hotkey.error("Failed to start hotkey manager - check Accessibility permissions")
         }
     }
     
@@ -96,9 +100,11 @@ class AppStateManager: ObservableObject {
         let hasPreference = UserDefaults.standard.object(forKey: Constants.UserDefaultsKeys.autoStartServer) != nil
         let autoStart = UserDefaults.standard.bool(forKey: Constants.UserDefaultsKeys.autoStartServer)
 
+        await checkModelDownloadStatus()
+        await ensureDefaultModelDownloadedIfNeeded()
+
         if !hasPreference || autoStart {
-            print("[AppStateManager] Auto-starting server on launch...")
-            await checkModelDownloadStatus()
+            Log.app.info("Auto-starting server on launch...")
             await startServer()
         }
     }
@@ -112,10 +118,10 @@ class AppStateManager: ObservableObject {
             // Start server with selected model pre-loaded
             try await serverManager?.start(model: selectedModel.identifier)
             state = .serverRunning
-            print("[AppStateManager] Server started successfully with model: \(selectedModel.name)")
+            Log.server.info("Server started successfully with model: \(selectedModel.name)")
         } catch {
             state = .error(error.localizedDescription)
-            print("[AppStateManager] Server failed to start: \(error)")
+            Log.server.error("Server failed to start: \(error)")
         }
     }
     
@@ -124,14 +130,14 @@ class AppStateManager: ObservableObject {
         audioCapture?.stopRecording()
         serverManager?.stop()
         state = .idle
-        print("[AppStateManager] Server stopped")
+        Log.server.info("Server stopped")
     }
     
     // MARK: - Recording Control
     
     func startRecording() {
         guard state == .serverRunning else {
-            print("[AppStateManager] Cannot start recording - server not running")
+            Log.app.warning("Cannot start recording - server not running")
             return
         }
         
@@ -171,7 +177,7 @@ class AppStateManager: ObservableObject {
         audioAmplitude = 0.0
         
         state = .serverRunning
-        print("[AppStateManager] Recording stopped")
+        Log.app.info("Recording stopped")
     }
     
     func toggleRecording() {
@@ -187,11 +193,11 @@ class AppStateManager: ObservableObject {
     private func handleTranscription(_ text: String, isPartial: Bool) {
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedText.isEmpty else {
-            print("[AppStateManager] ⚠️ Received empty transcription, ignoring")
+            Log.app.warning("Received empty transcription, ignoring")
             return
         }
         
-        print("[AppStateManager] 🎯 Received transcription: \"\(trimmedText)\" (partial: \(isPartial))")
+        Log.app.info("Received transcription: \"\(trimmedText)\" (partial: \(isPartial))")
         
         // Update displayed transcription
         currentTranscription = trimmedText
@@ -203,31 +209,64 @@ class AppStateManager: ObservableObject {
             let wordCount = trimmedText.split(separator: " ").count
             sessionWordCount += wordCount
             
-            print("[AppStateManager] 📝 Attempting to insert text: \"\(trimmedText)\" (\(wordCount) words)")
+            Log.textInsertion.info("Attempting to insert text: \"\(trimmedText)\" (\(wordCount) words)")
             
             // Insert text at cursor
             if let inserter = textInserter {
-                inserter.insertText(trimmedText + " ")  // Add space after
-                print("[AppStateManager] ✅ Text insertion called successfully")
+                performInsertion(text: trimmedText + " ", inserter: inserter)
             } else {
-                print("[AppStateManager] ❌ TextInserter is nil! Cannot insert text.")
+                Log.textInsertion.error("TextInserter is nil. Cannot insert text.")
+                lastInsertionError = "Text inserter not initialized."
+                lastInsertionMethod = nil
             }
         } else {
-            print("[AppStateManager] ⏳ Partial transcription received, waiting for final...")
+            Log.app.debug("Partial transcription received, waiting for final...")
+        }
+    }
+
+    func testInsertion(_ text: String) {
+        guard let inserter = textInserter else {
+            Log.textInsertion.error("TextInserter is nil. Cannot insert text.")
+            lastInsertionError = "Text inserter not initialized."
+            lastInsertionMethod = nil
+            return
+        }
+        performInsertion(text: text, inserter: inserter)
+    }
+
+    private func performInsertion(text: String, inserter: TextInserter) {
+        let result = inserter.insertText(text)
+        switch result {
+        case .success(let method):
+            lastInsertionError = nil
+            lastInsertionMethod = method.rawValue
+            Log.textInsertion.info("Text insertion succeeded via \(method.rawValue)")
+        case .failure(let error):
+            lastInsertionError = error.localizedDescription
+            lastInsertionMethod = nil
+            Log.textInsertion.error("Text insertion failed: \(error.localizedDescription)")
         }
     }
     
     // MARK: - Model Management
 
     func checkModelDownloadStatus() async {
+        if modelDownloadStatus == .downloading {
+            return
+        }
+
         modelDownloadStatus = .checking
 
         do {
             let isDownloaded = try await serverManager?.checkModelExists(selectedModel.identifier) ?? false
             modelDownloadStatus = isDownloaded ? .downloaded : .notDownloaded
+            modelDownloadError = nil
+            modelDownloadProgress = nil
         } catch {
-            print("[AppStateManager] Failed to check model status: \(error)")
+            Log.server.error("Failed to check model status: \(error)")
             modelDownloadStatus = .unknown
+            modelDownloadError = error.localizedDescription
+            modelDownloadProgress = nil
         }
     }
 
@@ -240,9 +279,56 @@ class AppStateManager: ObservableObject {
 
         // If server is running, restart with new model
         if state == .serverRunning {
-            print("[AppStateManager] Restarting server with new model: \(model.name)")
+            Log.server.info("Restarting server with new model: \(model.name)")
             stopServer()
             await startServer()
+        }
+    }
+
+    private func ensureDefaultModelDownloadedIfNeeded() async {
+        guard SetupManager.isSetupComplete else { return }
+        guard selectedModel.identifier == Constants.Models.defaultModel.identifier else { return }
+        guard modelDownloadStatus == .notDownloaded || modelDownloadStatus == .unknown else { return }
+        let didAutoDownload = UserDefaults.standard.bool(forKey: Constants.UserDefaultsKeys.didAutoDownloadDefaultModel)
+        guard !didAutoDownload else { return }
+
+        await downloadSelectedModel()
+    }
+
+    func downloadSelectedModel() async {
+        guard modelDownloadStatus != .downloading else { return }
+        guard SetupManager.isSetupComplete else {
+            modelDownloadError = "Setup not complete. Finish setup before downloading models."
+            return
+        }
+        guard let serverManager else {
+            modelDownloadStatus = .unknown
+            modelDownloadError = "Server manager unavailable."
+            return
+        }
+
+        modelDownloadStatus = .downloading
+        modelDownloadError = nil
+        modelDownloadProgress = nil
+
+        do {
+            try await serverManager.downloadModel(selectedModel.identifier) { progress in
+                Task { @MainActor in
+                    self.modelDownloadProgress = progress
+                }
+            }
+            modelDownloadStatus = .downloaded
+            modelDownloadError = nil
+            modelDownloadProgress = nil
+
+            if selectedModel.identifier == Constants.Models.defaultModel.identifier {
+                UserDefaults.standard.set(true, forKey: Constants.UserDefaultsKeys.didAutoDownloadDefaultModel)
+            }
+        } catch {
+            Log.server.error("Failed to download model \(selectedModel.identifier): \(error)")
+            modelDownloadStatus = .notDownloaded
+            modelDownloadError = error.localizedDescription
+            modelDownloadProgress = nil
         }
     }
 
@@ -269,7 +355,7 @@ extension AppStateManager: WebSocketClientDelegate {
     
     nonisolated func webSocketDidConnect() {
         Task { @MainActor in
-            print("[AppStateManager] WebSocket connected, starting audio...")
+            Log.websocket.info("WebSocket connected, starting audio...")
 
             // Send configuration with selected model
             let config = ClientConfig.with(model: selectedModel.identifier)
@@ -280,7 +366,7 @@ extension AppStateManager: WebSocketClientDelegate {
                 try audioCapture?.startRecording()
                 state = .recording
             } catch {
-                print("[AppStateManager] Failed to start audio: \(error)")
+                Log.audio.error("Failed to start audio: \(error)")
                 state = .error(error.localizedDescription)
                 webSocketClient?.disconnect()
             }
@@ -292,7 +378,7 @@ extension AppStateManager: WebSocketClientDelegate {
             audioCapture?.stopRecording()
             if state == .recording || state == .connecting {
                 if let error = error {
-                    print("[AppStateManager] WebSocket disconnected with error: \(error)")
+                    Log.websocket.error("WebSocket disconnected with error: \(error)")
                 }
                 state = .serverRunning
             }
@@ -307,7 +393,7 @@ extension AppStateManager: WebSocketClientDelegate {
     
     nonisolated func webSocketDidReceiveStatus(_ status: ServerStatus) {
         Task { @MainActor in
-            print("[AppStateManager] Server status: \(status.status) - \(status.message)")
+            Log.server.info("Server status: \(status.status) - \(status.message)")
         }
     }
 }
@@ -330,7 +416,7 @@ extension AppStateManager: AudioCaptureDelegate {
     
     nonisolated func audioCaptureDidFail(error: Error) {
         Task { @MainActor in
-            print("[AppStateManager] Audio capture failed: \(error)")
+            Log.audio.error("Audio capture failed: \(error)")
             state = .error(error.localizedDescription)
             webSocketClient?.disconnect()
         }
