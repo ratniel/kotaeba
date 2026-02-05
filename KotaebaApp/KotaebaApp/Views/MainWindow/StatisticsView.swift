@@ -1,9 +1,7 @@
 import SwiftUI
-import SwiftData
 
 /// Compact statistics display view
 struct StatisticsView: View {
-    @Environment(\.modelContext) private var modelContext
     @State private var stats: AggregatedStats = .empty
 
     var body: some View {
@@ -64,8 +62,7 @@ struct StatisticsView: View {
     // MARK: - Helpers
 
     private func refreshStats() {
-        let manager = StatisticsManager()
-        stats = manager.getAggregatedStats()
+        stats = StatisticsManager.shared.getAggregatedStats()
     }
 
     private func formatNumber(_ number: Int) -> String {
