@@ -151,11 +151,12 @@ class ServerManager {
     
     private func startHealthMonitoring() {
         healthCheckTimer = Timer.scheduledTimer(withTimeInterval: Constants.Server.healthCheckInterval, repeats: true) { [weak self] _ in
-            Task {
-                if await self?.checkHealth() == false {
+            Task { [weak self] in
+                guard let self else { return }
+                if await self.checkHealth() == false {
                     await MainActor.run {
                         Log.server.warning("Health check failed")
-                        self?.isRunning = false
+                        self.isRunning = false
                     }
                 }
             }
@@ -210,7 +211,7 @@ class ServerManager {
         var lastProgress: Double = 0
         let percentRegex = try? NSRegularExpression(pattern: "(\\d{1,3})(?:\\.\\d+)?%")
 
-        try await ShellCommandRunner.run(command, currentDirectory: Constants.supportDirectory) { output in
+        try await ShellCommandRunner.run(command: command, currentDirectory: Constants.supportDirectory) { output in
             Task { @MainActor in
                 Log.server.info(output)
             }
