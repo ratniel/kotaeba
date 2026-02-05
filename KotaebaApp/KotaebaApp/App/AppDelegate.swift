@@ -15,6 +15,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var recordingBarWindowController: RecordingBarWindowController?
     private var cancellables = Set<AnyCancellable>()
+    private var onboardingWindow: NSWindow?
     
     // MARK: - App Lifecycle
     
@@ -69,10 +70,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem.separator())
         
         // Server control
-        if state == .idle || state == .error("") {
+        switch state {
+        case .idle, .error:
             menu.addItem(NSMenuItem(title: "Start Server", action: #selector(startServer), keyEquivalent: "s"))
-        } else if state == .serverRunning || state == .recording {
+        case .serverRunning, .recording:
             menu.addItem(NSMenuItem(title: "Stop Server", action: #selector(stopServer), keyEquivalent: "s"))
+        default:
+            break
         }
         
         menu.addItem(NSMenuItem.separator())
@@ -231,17 +235,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     @objc private func openOnboarding() {
         setDockVisible(true)
-        let onboardingWindow = NSWindow(
+
+        if let existingWindow = onboardingWindow {
+            existingWindow.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 500, height: 400),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
         )
-        onboardingWindow.title = "Welcome to Kotaeba"
-        onboardingWindow.contentView = NSHostingView(rootView: OnboardingView())
-        onboardingWindow.center()
-        onboardingWindow.makeKeyAndOrderFront(nil)
+        window.title = "Welcome to Kotaeba"
+        window.contentView = NSHostingView(rootView: OnboardingView())
+        window.isReleasedWhenClosed = false
+        window.center()
+        window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        onboardingWindow = window
     }
 
     private func closeMainWindowIfNeeded() {

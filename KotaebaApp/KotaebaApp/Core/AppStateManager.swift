@@ -31,7 +31,7 @@ class AppStateManager: ObservableObject {
     
     // MARK: - Components
     
-    private var serverManager: ServerManager?
+    private var serverManager: ServerManaging?
     private var audioCapture: AudioCaptureManager?
     private var webSocketClient: WebSocketClient?
     private var hotkeyManager: HotkeyManager?
@@ -54,8 +54,32 @@ class AppStateManager: ObservableObject {
             await autoStartServer()
         }
     }
+
+    init(
+        serverManager: ServerManaging,
+        audioCapture: AudioCaptureManager? = nil,
+        textInserter: TextInserter? = nil,
+        statisticsManager: StatisticsManager? = nil,
+        autoStartServer: Bool = false
+    ) {
+        self.serverManager = serverManager
+        self.audioCapture = audioCapture
+        self.textInserter = textInserter
+        self.statisticsManager = statisticsManager
+        loadPreferences()
+
+        if autoStartServer {
+            Task {
+                await autoStartServer()
+            }
+        }
+    }
     
     private func loadPreferences() {
+        UserDefaults.standard.register(defaults: [
+            Constants.UserDefaultsKeys.safeModeEnabled: true
+        ])
+
         if let modeString = UserDefaults.standard.string(forKey: Constants.UserDefaultsKeys.recordingMode),
            let mode = RecordingMode(rawValue: modeString) {
             recordingMode = mode
@@ -110,7 +134,12 @@ class AppStateManager: ObservableObject {
     }
 
     func startServer() async {
-        guard state == .idle || state == .error("") else { return }
+        switch state {
+        case .idle, .error:
+            break
+        default:
+            return
+        }
 
         state = .serverStarting
 
@@ -196,8 +225,8 @@ class AppStateManager: ObservableObject {
             Log.app.warning("Received empty transcription, ignoring")
             return
         }
-        
-        Log.app.info("Received transcription: \"\(trimmedText)\" (partial: \(isPartial))")
+
+        logTranscription(trimmedText, isPartial: isPartial)
         
         // Update displayed transcription
         currentTranscription = trimmedText
@@ -208,12 +237,13 @@ class AppStateManager: ObservableObject {
             // Count words
             let wordCount = trimmedText.split(separator: " ").count
             sessionWordCount += wordCount
-            
-            Log.textInsertion.info("Attempting to insert text: \"\(trimmedText)\" (\(wordCount) words)")
+
+            logInsertionAttempt(wordCount: wordCount, textLength: trimmedText.count)
             
             // Insert text at cursor
             if let inserter = textInserter {
-                performInsertion(text: trimmedText + " ", inserter: inserter)
+                let insertionText = sanitizeForInsertion(trimmedText) + " "
+                performInsertion(text: insertionText, inserter: inserter)
             } else {
                 Log.textInsertion.error("TextInserter is nil. Cannot insert text.")
                 lastInsertionError = "Text inserter not initialized."
@@ -231,7 +261,7 @@ class AppStateManager: ObservableObject {
             lastInsertionMethod = nil
             return
         }
-        performInsertion(text: text, inserter: inserter)
+        performInsertion(text: sanitizeForInsertion(text), inserter: inserter)
     }
 
     private func performInsertion(text: String, inserter: TextInserter) {
@@ -246,6 +276,32 @@ class AppStateManager: ObservableObject {
             lastInsertionMethod = nil
             Log.textInsertion.error("Text insertion failed: \(error.localizedDescription)")
         }
+    }
+
+    private func sanitizeForInsertion(_ text: String) -> String {
+        let isSafeModeEnabled = UserDefaults.standard.bool(forKey: Constants.UserDefaultsKeys.safeModeEnabled)
+        guard isSafeModeEnabled else { return text }
+        let sanitized = text
+            .replacingOccurrences(of: "\r\n", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+        return sanitized
+    }
+
+    private func logTranscription(_ text: String, isPartial: Bool) {
+        #if DEBUG
+        Log.app.info("Received transcription: \"\(text)\" (partial: \(isPartial))")
+        #else
+        Log.app.info("Received transcription (\(text.count) chars, partial: \(isPartial))")
+        #endif
+    }
+
+    private func logInsertionAttempt(wordCount: Int, textLength: Int) {
+        #if DEBUG
+        Log.textInsertion.info("Attempting to insert text (\(wordCount) words, \(textLength) chars)")
+        #else
+        Log.textInsertion.info("Attempting to insert text (\(wordCount) words)")
+        #endif
     }
     
     // MARK: - Model Management

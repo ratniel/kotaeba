@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import AppKit
 
 /// Main app entry point
 /// 
@@ -25,7 +26,17 @@ struct KotaebaApp: App {
         do {
             return try ModelContainer(for: schema, configurations: [modelConfiguration])
         } catch {	
-            fatalError("Could not create ModelContainer: \(error)")
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.messageText = "Kotaeba couldn't start"
+                alert.informativeText = "The app's data storage couldn't be initialized. Please try again or reinstall the app."
+                alert.addButton(withTitle: "Quit")
+                alert.alertStyle = .critical
+                _ = alert.runModal()
+                NSApp.terminate(nil)
+            }
+            let fallback = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+            return try! ModelContainer(for: schema, configurations: [fallback])
         }
     }()
     

@@ -10,39 +10,55 @@ class StatisticsManager {
     
     private var modelContainer: ModelContainer?
     private var modelContext: ModelContext?
+    private var cachedTodayStats: AggregatedStats?
+    private var cachedTodayStartOfDay: Date?
+    private let storeInMemory: Bool
+    private(set) var isAvailable = true
+    private(set) var lastError: Error?
     
     // MARK: - Initialization
     
-    init() {
+    init(storeInMemory: Bool = false) {
+        self.storeInMemory = storeInMemory
         setupModelContainer()
     }
     
     private func setupModelContainer() {
         do {
             let schema = Schema([TranscriptionSession.self])
-            let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+            let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: storeInMemory)
             modelContainer = try ModelContainer(for: schema, configurations: [config])
             
             if let container = modelContainer {
                 modelContext = ModelContext(container)
             }
+            isAvailable = true
+            lastError = nil
         } catch {
             Log.stats.error("Failed to setup model container: \(error)")
+            isAvailable = false
+            lastError = error
         }
     }
     
     // MARK: - Session Recording
     
     /// Record a completed transcription session
-    func recordSession(wordCount: Int, duration: TimeInterval, text: String? = nil, language: String = "en") {
+    func recordSession(
+        wordCount: Int,
+        duration: TimeInterval,
+        text: String? = nil,
+        language: String = "en",
+        now: Date = Date()
+    ) {
         guard let context = modelContext else {
             Log.stats.error("Model context not available")
             return
         }
         
         let session = TranscriptionSession(
-            startTime: Date().addingTimeInterval(-duration),
-            endTime: Date(),
+            startTime: now.addingTimeInterval(-duration),
+            endTime: now,
             wordCount: wordCount,
             duration: duration,
             transcribedText: text,
@@ -54,6 +70,7 @@ class StatisticsManager {
         do {
             try context.save()
             Log.stats.info("Session recorded: \(wordCount) words, \(Int(duration))s")
+            updateTodayCacheIfNeeded(with: wordCount, duration: duration, now: now)
         } catch {
             Log.stats.error("Failed to save session: \(error)")
         }
@@ -86,13 +103,21 @@ class StatisticsManager {
     }
     
     /// Get statistics for today
-    func getTodayStats() -> AggregatedStats {
+    func getTodayStats(currentDate: Date = Date()) -> AggregatedStats {
         guard let context = modelContext else {
             return .empty
         }
         
         let calendar = Calendar.current
-        let startOfDay = calendar.startOfDay(for: Date())
+        let startOfDay = calendar.startOfDay(for: currentDate)
+        if cachedTodayStartOfDay != startOfDay {
+            cachedTodayStartOfDay = startOfDay
+            cachedTodayStats = nil
+        }
+
+        if let cached = cachedTodayStats {
+            return cached
+        }
         
         do {
             let predicate = #Predicate<TranscriptionSession> { session in
@@ -104,11 +129,13 @@ class StatisticsManager {
             let totalWords = sessions.reduce(0) { $0 + $1.wordCount }
             let totalDuration = sessions.reduce(0.0) { $0 + $1.duration }
             
-            return AggregatedStats(
+            let stats = AggregatedStats(
                 totalWords: totalWords,
                 totalDuration: totalDuration,
                 sessionCount: sessions.count
             )
+            cachedTodayStats = stats
+            return stats
         } catch {
             Log.stats.error("Failed to fetch today's sessions: \(error)")
             return .empty
@@ -170,8 +197,28 @@ class StatisticsManager {
             try context.delete(model: TranscriptionSession.self)
             try context.save()
             Log.stats.info("All data cleared")
+            cachedTodayStats = nil
+            cachedTodayStartOfDay = nil
         } catch {
             Log.stats.error("Failed to clear data: \(error)")
+        }
+    }
+
+    private func updateTodayCacheIfNeeded(with wordCount: Int, duration: TimeInterval, now: Date) {
+        let calendar = Calendar.current
+        let startOfDay = calendar.startOfDay(for: now)
+
+        if cachedTodayStartOfDay != startOfDay {
+            cachedTodayStartOfDay = startOfDay
+            cachedTodayStats = nil
+        }
+
+        if let cached = cachedTodayStats {
+            cachedTodayStats = AggregatedStats(
+                totalWords: cached.totalWords + wordCount,
+                totalDuration: cached.totalDuration + duration,
+                sessionCount: cached.sessionCount + 1
+            )
         }
     }
 }

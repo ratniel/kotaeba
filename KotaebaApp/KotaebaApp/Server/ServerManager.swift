@@ -1,5 +1,12 @@
 import Foundation
 
+protocol ServerManaging: AnyObject {
+    func start(model: String) async throws
+    func stop()
+    func checkModelExists(_ modelIdentifier: String) async throws -> Bool
+    func downloadModel(_ modelIdentifier: String, progressHandler: ((Double) -> Void)?) async throws
+}
+
 /// Manages the mlx_audio.server Python subprocess
 ///
 /// Responsibilities:
@@ -219,6 +226,8 @@ class ServerManager {
         }
     }
 }
+
+extension ServerManager: ServerManaging {}
 
 // MARK: - Server Errors
 
