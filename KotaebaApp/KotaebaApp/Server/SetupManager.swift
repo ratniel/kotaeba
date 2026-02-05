@@ -119,7 +119,7 @@ class SetupManager: ObservableObject {
         let script = """
         curl -LsSf https://astral.sh/uv/install.sh | sh
         """
-        try await ShellCommandRunner.run(script) { output in
+        try await ShellCommandRunner.run(command: script) { output in
             Log.setup.info(output)
         }
     }
@@ -133,7 +133,7 @@ class SetupManager: ObservableObject {
         cd "\(supportPath)"
         \(uvPath) venv --python 3.11
         """
-        try await ShellCommandRunner.run(script) { output in
+        try await ShellCommandRunner.run(command: script) { output in
             Log.setup.info(output)
         }
     }
@@ -152,7 +152,7 @@ class SetupManager: ObservableObject {
         # Install dependencies
         \(uvPath) add mlx-audio mlx fastapi uvicorn websockets
         """
-        try await ShellCommandRunner.run(script) { output in
+        try await ShellCommandRunner.run(command: script) { output in
             Log.setup.info(output)
         }
     }
@@ -166,7 +166,7 @@ class SetupManager: ObservableObject {
         cd "\(supportPath)"
         \(uvPath) run python -c "from mlx_audio.utils import load_model; load_model('\(Constants.Models.defaultModel.identifier)')"
         """
-        try await ShellCommandRunner.run(script) { output in
+        try await ShellCommandRunner.run(command: script) { output in
             Log.setup.info(output)
         }
     }
