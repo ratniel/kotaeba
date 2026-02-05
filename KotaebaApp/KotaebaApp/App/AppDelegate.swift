@@ -34,7 +34,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Clean shutdown
         AppStateManager.shared.shutdown()
     }
-    
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        Task { @MainActor in
+            await AppStateManager.shared.shutdownForTermination()
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         // Don't quit when window closes - we're a menubar app
         return false
@@ -187,28 +195,37 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     private func checkFirstRun() {
         let setupCompleted = isSetupReady()
-        let permissionsGranted = PermissionManager.checkAllPermissions()
 
-        if !setupCompleted || !permissionsGranted {
+        if !setupCompleted {
             closeMainWindowIfNeeded()
             // Show onboarding window
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 self.openOnboarding()
             }
-        } else {
-            closeOnboardingIfNeeded()
-            // Initialize hotkey manager
-            AppStateManager.shared.initializeHotkey()
-            openMainWindow()
+            return
+        }
+
+        closeOnboardingIfNeeded()
+        // Initialize hotkey manager
+        AppStateManager.shared.initializeHotkey()
+        openMainWindow()
+
+        if !PermissionManager.checkAllPermissions() {
+            PermissionManager.requestAccessibilityPermission()
+            Task {
+                _ = await PermissionManager.requestMicrophonePermissionOrOpenSettings()
+            }
         }
     }
 
     private func isSetupReady() -> Bool {
-        let venvReady = FileManager.default.isExecutableFile(atPath: Constants.Setup.pythonPath.path)
+        let venvExists = FileManager.default.fileExists(atPath: Constants.Setup.venvPath.path)
+        let pythonExists = FileManager.default.isExecutableFile(atPath: Constants.Setup.pythonPath.path)
+        let venvReady = venvExists || pythonExists
         if venvReady && !SetupManager.isSetupComplete {
             UserDefaults.standard.set(true, forKey: Constants.Setup.setupCompletedKey)
         }
-        return SetupManager.isSetupComplete || venvReady
+        return venvReady
     }
     
     // MARK: - Menu Actions
@@ -224,9 +241,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     @objc private func openMainWindow() {
-        let setupCompleted = SetupManager.isSetupComplete
-        let permissionsGranted = PermissionManager.checkAllPermissions()
-        if !setupCompleted || !permissionsGranted {
+        let setupCompleted = isSetupReady()
+        if !setupCompleted {
             closeMainWindowIfNeeded()
             openOnboarding()
             return

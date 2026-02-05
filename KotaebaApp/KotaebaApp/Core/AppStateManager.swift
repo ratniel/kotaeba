@@ -165,6 +165,7 @@ class AppStateManager: ObservableObject {
     // MARK: - Recording Control
     
     func startRecording() {
+        Log.app.info("startRecording requested (state: \(state), mode: \(recordingMode))")
         guard state == .serverRunning else {
             Log.app.warning("Cannot start recording - server not running")
             return
@@ -182,6 +183,7 @@ class AppStateManager: ObservableObject {
     }
     
     func stopRecording() {
+        Log.app.info("stopRecording requested (state: \(state), mode: \(recordingMode))")
         guard state == .recording || state == .connecting else { return }
         
         // Stop audio first
@@ -210,6 +212,7 @@ class AppStateManager: ObservableObject {
     }
     
     func toggleRecording() {
+        Log.app.info("toggleRecording requested (state: \(state), mode: \(recordingMode))")
         if state == .recording || state == .connecting {
             stopRecording()
         } else if state == .serverRunning {
@@ -400,6 +403,16 @@ class AppStateManager: ObservableObject {
         stopServer()
         hotkeyManager?.stop()
     }
+
+    /// Best-effort cleanup before app termination to avoid leaving server processes running.
+    func shutdownForTermination() async {
+        stopRecording()
+        webSocketClient?.disconnect()
+        audioCapture?.stopRecording()
+        await serverManager?.stopAndWait(timeout: 2.0)
+        hotkeyManager?.stop()
+        state = .idle
+    }
 }
 
 // MARK: - WebSocketClientDelegate
@@ -408,6 +421,7 @@ extension AppStateManager: WebSocketClientDelegate {
     
     nonisolated func webSocketDidConnect() {
         Task { @MainActor in
+            Log.websocket.info("webSocketDidConnect received (state: \(state))")
             Log.websocket.info("WebSocket connected, starting audio...")
 
             // Send configuration with selected model
@@ -428,6 +442,7 @@ extension AppStateManager: WebSocketClientDelegate {
     
     nonisolated func webSocketDidDisconnect(error: Error?) {
         Task { @MainActor in
+            Log.websocket.info("webSocketDidDisconnect received (state: \(state), error: \(error?.localizedDescription ?? "none"))")
             audioCapture?.stopRecording()
             if state == .recording || state == .connecting {
                 if let error = error {
@@ -482,6 +497,7 @@ extension AppStateManager: HotkeyManagerDelegate {
     
     nonisolated func hotkeyDidTriggerStart() {
         Task { @MainActor in
+            Log.hotkey.info("Hotkey start trigger received (mode: \(recordingMode), state: \(state))")
             if recordingMode == .toggle {
                 toggleRecording()
             } else {
@@ -492,6 +508,7 @@ extension AppStateManager: HotkeyManagerDelegate {
     
     nonisolated func hotkeyDidTriggerStop() {
         Task { @MainActor in
+            Log.hotkey.info("Hotkey stop trigger received (mode: \(recordingMode), state: \(state))")
             if recordingMode == .hold {
                 stopRecording()
             }

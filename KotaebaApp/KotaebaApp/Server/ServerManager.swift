@@ -3,6 +3,7 @@ import Foundation
 protocol ServerManaging: AnyObject {
     func start(model: String) async throws
     func stop()
+    func stopAndWait(timeout: TimeInterval) async
     func checkModelExists(_ modelIdentifier: String) async throws -> Bool
     func downloadModel(_ modelIdentifier: String, progressHandler: ((Double) -> Void)?) async throws
 }
@@ -122,6 +123,35 @@ class ServerManager {
             self?.cleanup()
         }
         
+        isRunning = false
+        Log.server.info("Server stopped")
+    }
+
+    /// Stop the server subprocess and wait for termination (best-effort).
+    /// Intended for app shutdown to avoid leaving orphaned processes.
+    func stopAndWait(timeout: TimeInterval) async {
+        stopHealthMonitoring()
+
+        guard let process = process, process.isRunning else {
+            isRunning = false
+            cleanup()
+            return
+        }
+
+        Log.server.info("Stopping server process (PID: \(process.processIdentifier))")
+        process.terminate()
+
+        let deadline = Date().addingTimeInterval(timeout)
+        while process.isRunning && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 100_000_000)  // 0.1s
+        }
+
+        if process.isRunning {
+            Log.server.warning("Server did not terminate within \(timeout)s, interrupting...")
+            process.interrupt()
+        }
+
+        cleanup()
         isRunning = false
         Log.server.info("Server stopped")
     }
