@@ -60,7 +60,7 @@ class AppStateManager: ObservableObject {
         audioCapture: AudioCaptureManager? = nil,
         textInserter: TextInserter? = nil,
         statisticsManager: StatisticsManager? = nil,
-        autoStartServer: Bool = false
+        shouldAutoStartServer: Bool = false
     ) {
         self.serverManager = serverManager
         self.audioCapture = audioCapture
@@ -68,9 +68,9 @@ class AppStateManager: ObservableObject {
         self.statisticsManager = statisticsManager
         loadPreferences()
 
-        if autoStartServer {
+        if shouldAutoStartServer {
             Task {
-                await autoStartServer()
+                await self.autoStartServer()
             }
         }
     }
@@ -281,10 +281,7 @@ class AppStateManager: ObservableObject {
     private func sanitizeForInsertion(_ text: String) -> String {
         let isSafeModeEnabled = UserDefaults.standard.bool(forKey: Constants.UserDefaultsKeys.safeModeEnabled)
         guard isSafeModeEnabled else { return text }
-        let sanitized = text
-            .replacingOccurrences(of: "\r\n", with: " ")
-            .replacingOccurrences(of: "\n", with: " ")
-            .replacingOccurrences(of: "\r", with: " ")
+        let sanitized = text.components(separatedBy: .newlines).joined(separator: " ")
         return sanitized
     }
 

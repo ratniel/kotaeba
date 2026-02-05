@@ -213,12 +213,11 @@ class StatisticsManager {
             cachedTodayStats = nil
         }
 
-        if let cached = cachedTodayStats {
-            cachedTodayStats = AggregatedStats(
-                totalWords: cached.totalWords + wordCount,
-                totalDuration: cached.totalDuration + duration,
-                sessionCount: cached.sessionCount + 1
-            )
-        }
+        let cached = cachedTodayStats ?? .empty
+        cachedTodayStats = AggregatedStats(
+            totalWords: cached.totalWords + wordCount,
+            totalDuration: cached.totalDuration + duration,
+            sessionCount: cached.sessionCount + 1
+        )
     }
 }

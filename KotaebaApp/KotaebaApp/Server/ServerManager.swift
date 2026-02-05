@@ -75,7 +75,10 @@ class ServerManager {
         outputPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if let output = String(data: data, encoding: .utf8), !output.isEmpty {
-                Log.server.info(output.trimmingCharacters(in: .whitespacesAndNewlines))
+                let message = output.trimmingCharacters(in: .whitespacesAndNewlines)
+                Task { @MainActor in
+                    Log.server.info(message)
+                }
             }
         }
 
@@ -150,8 +153,8 @@ class ServerManager {
         healthCheckTimer = Timer.scheduledTimer(withTimeInterval: Constants.Server.healthCheckInterval, repeats: true) { [weak self] _ in
             Task {
                 if await self?.checkHealth() == false {
-                    Log.server.warning("Health check failed")
                     await MainActor.run {
+                        Log.server.warning("Health check failed")
                         self?.isRunning = false
                     }
                 }
@@ -208,7 +211,9 @@ class ServerManager {
         let percentRegex = try? NSRegularExpression(pattern: "(\\d{1,3})(?:\\.\\d+)?%")
 
         try await ShellCommandRunner.run(command, currentDirectory: Constants.supportDirectory) { output in
-            Log.server.info(output)
+            Task { @MainActor in
+                Log.server.info(output)
+            }
 
             guard let percentRegex else { return }
             let range = NSRange(output.startIndex..<output.endIndex, in: output)
