@@ -69,7 +69,7 @@ class Settings(BaseSettings):
     STT_MODEL: str = Field(
         default="mlx-community/Qwen3-ASR-0.6B-8bit", description="Whisper model to use"
     )
-    STT_HOST: str = Field(default="0.0.0.0", description="Server host")
+    STT_HOST: str = Field(default="127.0.0.1", description="Server host")
     STT_PORT: int = Field(default=8000, ge=1, le=65535, description="Server port")
 
     # Audio Configuration (nested)

@@ -1,29 +1,59 @@
-# Python-generated files
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Xcode
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+DerivedData/
+.derivedData/
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM
+*.dSYM.zip
+*.dSYM.tar.gz
+*.xcarchive
+*.pbxuser
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# CocoaPods
+Pods/
+
+# Carthage
+Carthage/Build/
+
+# fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/
+fastlane/test_output/
+
+# Python
 __pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
+*.py[cod]
+*.egg-info/
+.dist-info/
+.venv/
+.env
 
-# Virtual environments
-.venv
-
-# Ruff
-.ruff_cache
-.ruff_cache.json
-
-# Specstory
-.specstory/
-
-# VS Code
-.vscode
-
-# Local logs
+# Logs
 logs/
 
-# agents
+# Editors and tooling
+.vscode/
 .cursor/
 .opencode/
+.specstory/
 
-*.h
+# Temp
+*.tmp
+
+# Clang module cache
+*.pcm
