@@ -199,9 +199,7 @@ class StatisticsManager {
             persistTotalCache()
 
             let sessionDate = session.startTime
-            if let cachedTodayDate, calendar.isDate(cachedTodayDate, inSameDayAs: sessionDate) == false {
-                resetTodayCache(for: sessionDate)
-            } else if cachedTodayDate == nil {
+            if !(cachedTodayDate.map { calendar.isDate($0, inSameDayAs: sessionDate) } ?? false) {
                 resetTodayCache(for: sessionDate)
             }
 
