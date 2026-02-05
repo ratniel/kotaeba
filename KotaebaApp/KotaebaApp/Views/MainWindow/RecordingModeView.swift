@@ -18,6 +18,7 @@ struct RecordingModeView: View {
             HStack(spacing: 10) {
                 ForEach(RecordingMode.allCases, id: \.self) { mode in
                     ModeButton(mode: mode, isSelected: stateManager.recordingMode == mode) {
+                        guard stateManager.recordingMode != mode else { return }
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                             stateManager.setRecordingMode(mode)
                         }
@@ -59,6 +60,18 @@ struct ModeButton: View {
                     .font(.system(size: 11))
                     .foregroundColor(Constants.UI.textSecondary.opacity(0.8))
                     .multilineTextAlignment(.center)
+
+                if isSelected {
+                    Text("Selected")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(Constants.UI.accentOrange)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(
+                            Capsule()
+                                .fill(Constants.UI.accentOrange.opacity(0.15))
+                        )
+                }
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 14)
@@ -78,6 +91,7 @@ struct ModeButton: View {
             .scaleEffect(isHovering ? 1.02 : 1.0)
         }
         .buttonStyle(.plain)
+        .contentShape(.rect(cornerRadius: 12))
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.2)) {
                 isHovering = hovering

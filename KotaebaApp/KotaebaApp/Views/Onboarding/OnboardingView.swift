@@ -152,26 +152,30 @@ struct SetupStepView: View {
     let onComplete: () -> Void
     
     var body: some View {
-        VStack(spacing: 32) {
-            VStack(spacing: 12) {
-                Image(systemName: "gear.badge")
-                    .font(.system(size: 48))
+        let installPath = Constants.Setup.venvPath.path
+
+        VStack(spacing: 28) {
+            Spacer()
+
+            VStack(spacing: 10) {
+                Text("Kotaeba")
+                    .font(.system(size: 42, weight: .bold, design: .rounded))
                     .foregroundColor(Constants.UI.accentOrange)
-                
-                Text("Installing Dependencies")
-                    .font(.system(size: 28, weight: .bold))
+
+                Text("Installing Kotaeba")
+                    .font(.system(size: 24, weight: .bold))
                     .foregroundColor(Constants.UI.textPrimary)
-                
+
                 Text("Setting up Python environment and ML models")
                     .foregroundColor(Constants.UI.textSecondary)
             }
-            
+
             VStack(spacing: 16) {
                 if setupManager.isSettingUp {
                     ProgressView(value: setupManager.progress)
                         .progressViewStyle(.linear)
                         .tint(Constants.UI.accentOrange)
-                    
+
                     Text(setupManager.currentStep)
                         .font(.system(size: 14))
                         .foregroundColor(Constants.UI.textSecondary)
@@ -180,38 +184,49 @@ struct SetupStepView: View {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.system(size: 32))
                             .foregroundColor(Constants.UI.recordingRed)
-                        
+
                         Text("Setup Failed")
                             .font(.headline)
-                        
+
                         Text(error)
                             .font(.caption)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
-                        
-                        Button("Retry") {
-                            Task {
-                                await setupManager.runSetup()
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundColor(Constants.UI.accentOrange)
                     }
-                    .padding()
+                    .padding(.horizontal, 12)
                 } else if setupManager.isComplete {
-                    VStack(spacing: 16) {
+                    VStack(spacing: 12) {
                         Image(systemName: "checkmark.circle.fill")
                             .font(.system(size: 48))
                             .foregroundColor(Constants.UI.successGreen)
-                        
+
                         Text("Setup Complete!")
                             .font(.headline)
                     }
+                } else {
+                    Text("Ready to install dependencies")
+                        .font(.system(size: 14))
+                        .foregroundColor(Constants.UI.textSecondary)
                 }
             }
-            
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Install Location")
+                    .font(.caption)
+                    .foregroundColor(Constants.UI.textSecondary)
+
+                Text(installPath)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundColor(Constants.UI.textPrimary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Constants.UI.surfaceDark)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+
             Spacer()
-            
+
             if setupManager.isComplete {
                 Button(action: onComplete) {
                     Text("Finish")
@@ -223,13 +238,32 @@ struct SetupStepView: View {
                         .cornerRadius(10)
                 }
                 .buttonStyle(.plain)
-            }
-        }
-        .onAppear {
-            if !setupManager.isSettingUp && !setupManager.isComplete {
-                Task {
-                    await setupManager.runSetup()
+            } else {
+                Button(action: {
+                    Task {
+                        await setupManager.runSetup()
+                    }
+                }) {
+                    Text(setupManager.isSettingUp ? "Installing..." : "Install Kotaeba")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(Constants.UI.accentOrange)
+                        .cornerRadius(10)
                 }
+                .buttonStyle(.plain)
+                .disabled(setupManager.isSettingUp)
+            }
+
+            if setupManager.error != nil {
+                Button("Retry") {
+                    Task {
+                        await setupManager.runSetup()
+                    }
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(Constants.UI.accentOrange)
             }
         }
     }
