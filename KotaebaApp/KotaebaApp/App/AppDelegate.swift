@@ -25,7 +25,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         observeStateChanges()
         observeWindowVisibility()
         checkFirstRun()
-        setDockVisible(false)
         Log.app.info("App logs at \(Constants.supportDirectory.appendingPathComponent("logs/kotaeba.log").path)")
         
         // Dock icon visibility is toggled based on whether a standard window is open.
@@ -187,7 +186,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - First Run
     
     private func checkFirstRun() {
-        let setupCompleted = SetupManager.isSetupComplete
+        let setupCompleted = isSetupReady()
         let permissionsGranted = PermissionManager.checkAllPermissions()
 
         if !setupCompleted || !permissionsGranted {
@@ -197,9 +196,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self.openOnboarding()
             }
         } else {
+            closeOnboardingIfNeeded()
             // Initialize hotkey manager
             AppStateManager.shared.initializeHotkey()
+            openMainWindow()
         }
+    }
+
+    private func isSetupReady() -> Bool {
+        let venvReady = FileManager.default.isExecutableFile(atPath: Constants.Setup.pythonPath.path)
+        if venvReady && !SetupManager.isSetupComplete {
+            UserDefaults.standard.set(true, forKey: Constants.Setup.setupCompletedKey)
+        }
+        return SetupManager.isSetupComplete || venvReady
     }
     
     // MARK: - Menu Actions
@@ -261,6 +270,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if let window = NSApp.windows.first(where: { $0.identifier?.rawValue == "main" }) {
             window.close()
         }
+    }
+
+    private func closeOnboardingIfNeeded() {
+        onboardingWindow?.close()
+        onboardingWindow = nil
     }
     
     @objc private func quit() {
