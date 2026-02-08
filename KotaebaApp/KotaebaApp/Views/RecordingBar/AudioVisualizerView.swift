@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 /// Animated audio visualizer with bars that respond to amplitude
 ///
@@ -7,6 +8,7 @@ import SwiftUI
 struct AudioVisualizerView: View {
     @EnvironmentObject var stateManager: AppStateManager
     @State private var barHeights: [CGFloat] = Array(repeating: 0.2, count: Constants.UI.visualizerBarCount)
+    private let idleTimer = Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()
     
     var body: some View {
         HStack(spacing: Constants.UI.visualizerBarSpacing) {
@@ -27,9 +29,8 @@ struct AudioVisualizerView: View {
         .onChange(of: stateManager.audioAmplitude) { _, newAmplitude in
             updateBarHeights(amplitude: newAmplitude)
         }
-        .onAppear {
-            // Start with a subtle idle animation
-            startIdleAnimation()
+        .onReceive(idleTimer) { _ in
+            updateIdleBarsIfNeeded()
         }
     }
     
@@ -49,18 +50,12 @@ struct AudioVisualizerView: View {
     }
     
     /// Idle animation when no audio (subtle wave)
-    private func startIdleAnimation() {
-        Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak stateManager] _ in
-            Task { @MainActor in
-                guard let stateManager = stateManager else { return }
-                guard stateManager.audioAmplitude < 0.1 else { return }
-
-                for i in 0..<Constants.UI.visualizerBarCount {
-                    let time = Date().timeIntervalSince1970
-                    let wave = sin(time * 2.0 + Double(i) * 0.5) * 0.15 + 0.2
-                    barHeights[i] = CGFloat(wave)
-                }
-            }
+    private func updateIdleBarsIfNeeded() {
+        guard stateManager.audioAmplitude < 0.1 else { return }
+        let time = Date().timeIntervalSince1970
+        for i in 0..<Constants.UI.visualizerBarCount {
+            let wave = sin(time * 2.0 + Double(i) * 0.5) * 0.15 + 0.2
+            barHeights[i] = CGFloat(wave)
         }
     }
     

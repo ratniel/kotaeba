@@ -32,6 +32,21 @@ struct PermissionStatusView: View {
                             .foregroundColor(Constants.UI.recordingRed.opacity(0.8))
                     }
 
+                    if isExpanded {
+                        Button(action: {
+                            permissionStatus = PermissionManager.getPermissionStatus()
+                        }) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.system(size: 10, weight: .semibold))
+                                Text("Recheck")
+                                    .font(.system(size: 11, weight: .semibold))
+                            }
+                            .foregroundColor(Constants.UI.accentOrange)
+                        }
+                        .buttonStyle(.plain)
+                    }
+
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundColor(Constants.UI.textSecondary)

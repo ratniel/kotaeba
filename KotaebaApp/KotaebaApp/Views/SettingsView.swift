@@ -6,6 +6,7 @@ struct SettingsView: View {
     @AppStorage(Constants.UserDefaultsKeys.autoStartServer) private var autoStartServer = false
     @AppStorage(Constants.UserDefaultsKeys.launchAtLogin) private var launchAtLogin = false
     @AppStorage(Constants.UserDefaultsKeys.useClipboardFallback) private var useClipboardFallback = false
+    @AppStorage(Constants.UserDefaultsKeys.safeModeEnabled) private var safeModeEnabled = true
     @AppStorage(Constants.UserDefaultsKeys.language) private var language = "en"
     
     var body: some View {
@@ -25,7 +26,8 @@ struct SettingsView: View {
             
             TranscriptionSettingsView(
                 language: $language,
-                useClipboardFallback: $useClipboardFallback
+                useClipboardFallback: $useClipboardFallback,
+                safeModeEnabled: $safeModeEnabled
             )
             .tabItem {
                 Label("Transcription", systemImage: "text.bubble")
@@ -127,6 +129,7 @@ struct HotkeySettingsView: View {
 struct TranscriptionSettingsView: View {
     @Binding var language: String
     @Binding var useClipboardFallback: Bool
+    @Binding var safeModeEnabled: Bool
     
     private let languages = [
         ("en", "English"),
@@ -160,9 +163,19 @@ struct TranscriptionSettingsView: View {
             }
             
             Section {
+                Toggle("Safe mode (prevent newlines)", isOn: $safeModeEnabled)
+
+                Text("Replaces newlines with spaces to avoid accidental command execution in terminals.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
                 Toggle("Use clipboard fallback for text insertion", isOn: $useClipboardFallback)
                 
                 Text("Enable if text insertion doesn't work in some apps. Temporarily modifies clipboard.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                Text("Clipboard fallback may not preserve all data types or metadata and can overwrite recent clipboard changes.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             } header: {

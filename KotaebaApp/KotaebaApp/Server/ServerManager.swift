@@ -1,5 +1,13 @@
 import Foundation
 
+protocol ServerManaging: AnyObject {
+    func start(model: String) async throws
+    func stop()
+    func stopAndWait(timeout: TimeInterval) async
+    func checkModelExists(_ modelIdentifier: String) async throws -> Bool
+    func downloadModel(_ modelIdentifier: String, progressHandler: ((Double) -> Void)?) async throws
+}
+
 /// Manages the mlx_audio.server Python subprocess
 ///
 /// Responsibilities:
@@ -70,7 +78,10 @@ class ServerManager {
         outputPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if let output = String(data: data, encoding: .utf8), !output.isEmpty {
-                Log.server.info(output.trimmingCharacters(in: .whitespacesAndNewlines))
+                let message = output.trimmingCharacters(in: .whitespacesAndNewlines)
+                Task { @MainActor in
+                    Log.server.info(message)
+                }
             }
         }
 
@@ -117,6 +128,35 @@ class ServerManager {
         isRunning = false
         Log.server.info("Server stopped")
     }
+
+    /// Stop the server subprocess and wait for termination (best-effort).
+    /// Intended for app shutdown to avoid leaving orphaned processes.
+    func stopAndWait(timeout: TimeInterval) async {
+        stopHealthMonitoring()
+
+        guard let process = process, process.isRunning else {
+            isRunning = false
+            cleanup()
+            return
+        }
+
+        Log.server.info("Stopping server process (PID: \(process.processIdentifier))")
+        process.terminate()
+
+        let deadline = Date().addingTimeInterval(timeout)
+        while process.isRunning && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 100_000_000)  // 0.1s
+        }
+
+        if process.isRunning {
+            Log.server.warning("Server did not terminate within \(timeout)s, interrupting...")
+            process.interrupt()
+        }
+
+        cleanup()
+        isRunning = false
+        Log.server.info("Server stopped")
+    }
     
     private func cleanup() {
         outputPipe?.fileHandleForReading.readabilityHandler = nil
@@ -143,11 +183,12 @@ class ServerManager {
     
     private func startHealthMonitoring() {
         healthCheckTimer = Timer.scheduledTimer(withTimeInterval: Constants.Server.healthCheckInterval, repeats: true) { [weak self] _ in
-            Task {
-                if await self?.checkHealth() == false {
-                    Log.server.warning("Health check failed")
+            Task { [weak self] in
+                guard let self else { return }
+                if await self.checkHealth() == false {
                     await MainActor.run {
-                        self?.isRunning = false
+                        Log.server.warning("Health check failed")
+                        self.isRunning = false
                     }
                 }
             }
@@ -199,9 +240,8 @@ class ServerManager {
 
         var lastProgress: Double = 0
         let percentRegex = try? NSRegularExpression(pattern: "(\\d{1,3})(?:\\.\\d+)?%")
-        let pythonURL = Constants.Setup.pythonPath
         let command = "from mlx_audio.utils import load_model; load_model('\(modelIdentifier)')"
-
+        let pythonURL = Constants.Setup.pythonPath
         try await ShellCommandRunner.run(
             executableURL: pythonURL,
             arguments: ["-c", command],
@@ -225,6 +265,8 @@ class ServerManager {
         }
     }
 }
+
+extension ServerManager: ServerManaging {}
 
 // MARK: - Server Errors
 

@@ -70,7 +70,11 @@ class TextInserter {
             return .failure(.accessibilityPermissionDenied)
         }
         
+        #if DEBUG
         Log.textInsertion.info("Inserting text: \"\(text)\"")
+        #else
+        Log.textInsertion.info("Inserting text (\(text.count) chars)")
+        #endif
         Log.textInsertion.debug("Current app: \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "Unknown")")
         
         // Method 1: Accessibility API (best for secure input / system-wide)
@@ -148,7 +152,11 @@ class TextInserter {
     /// Insert text using clipboard and simulated Cmd+V
     /// More compatible but temporarily modifies clipboard
     private func insertUsingClipboard(_ text: String) -> Bool {
+        #if DEBUG
         Log.textInsertion.info("Using clipboard fallback for: \"\(text)\"")
+        #else
+        Log.textInsertion.info("Using clipboard fallback (\(text.count) chars)")
+        #endif
         
         let pasteboard = NSPasteboard.general
         

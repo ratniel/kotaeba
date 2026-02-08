@@ -120,6 +120,7 @@ enum Constants {
         static let autoStartServer = "autoStartServer"
         static let launchAtLogin = "launchAtLogin"
         static let useClipboardFallback = "useClipboardFallback"
+        static let safeModeEnabled = "safeModeEnabled"
         static let selectedAudioDevice = "selectedAudioDevice"
         static let selectedModel = "selectedModel"
         static let didAutoDownloadDefaultModel = "didAutoDownloadDefaultModel"

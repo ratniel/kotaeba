@@ -15,6 +15,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var recordingBarWindowController: RecordingBarWindowController?
     private var cancellables = Set<AnyCancellable>()
+    private var onboardingWindow: NSWindow?
     
     // MARK: - App Lifecycle
     
@@ -24,7 +25,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         observeStateChanges()
         observeWindowVisibility()
         checkFirstRun()
-        setDockVisible(false)
         Log.app.info("App logs at \(Constants.supportDirectory.appendingPathComponent("logs/kotaeba.log").path)")
         
         // Dock icon visibility is toggled based on whether a standard window is open.
@@ -34,7 +34,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Clean shutdown
         AppStateManager.shared.shutdown()
     }
-    
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        Task { @MainActor in
+            await AppStateManager.shared.shutdownForTermination()
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         // Don't quit when window closes - we're a menubar app
         return false
@@ -69,10 +77,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem.separator())
         
         // Server control
-        if state == .idle || state == .error("") {
+        switch state {
+        case .idle, .error:
             menu.addItem(NSMenuItem(title: "Start Server", action: #selector(startServer), keyEquivalent: "s"))
-        } else if state == .serverRunning || state == .recording {
+        case .serverRunning, .recording:
             menu.addItem(NSMenuItem(title: "Stop Server", action: #selector(stopServer), keyEquivalent: "s"))
+        default:
+            break
         }
         
         menu.addItem(NSMenuItem.separator())
@@ -183,19 +194,38 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - First Run
     
     private func checkFirstRun() {
-        let setupCompleted = SetupManager.isSetupComplete
-        let permissionsGranted = PermissionManager.checkAllPermissions()
+        let setupCompleted = isSetupReady()
 
-        if !setupCompleted || !permissionsGranted {
+        if !setupCompleted {
             closeMainWindowIfNeeded()
             // Show onboarding window
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 self.openOnboarding()
             }
-        } else {
-            // Initialize hotkey manager
-            AppStateManager.shared.initializeHotkey()
+            return
         }
+
+        closeOnboardingIfNeeded()
+        // Initialize hotkey manager
+        AppStateManager.shared.initializeHotkey()
+        openMainWindow()
+
+        if !PermissionManager.checkAllPermissions() {
+            PermissionManager.requestAccessibilityPermission()
+            Task {
+                _ = await PermissionManager.requestMicrophonePermissionOrOpenSettings()
+            }
+        }
+    }
+
+    private func isSetupReady() -> Bool {
+        let venvExists = FileManager.default.fileExists(atPath: Constants.Setup.venvPath.path)
+        let pythonExists = FileManager.default.isExecutableFile(atPath: Constants.Setup.pythonPath.path)
+        let venvReady = venvExists || pythonExists
+        if venvReady && !SetupManager.isSetupComplete {
+            UserDefaults.standard.set(true, forKey: Constants.Setup.setupCompletedKey)
+        }
+        return venvReady
     }
     
     // MARK: - Menu Actions
@@ -211,9 +241,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     @objc private func openMainWindow() {
-        let setupCompleted = SetupManager.isSetupComplete
-        let permissionsGranted = PermissionManager.checkAllPermissions()
-        if !setupCompleted || !permissionsGranted {
+        let setupCompleted = isSetupReady()
+        if !setupCompleted {
             closeMainWindowIfNeeded()
             openOnboarding()
             return
@@ -231,23 +260,37 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     @objc private func openOnboarding() {
         setDockVisible(true)
-        let onboardingWindow = NSWindow(
+
+        if let existingWindow = onboardingWindow {
+            existingWindow.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 500, height: 400),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
         )
-        onboardingWindow.title = "Welcome to Kotaeba"
-        onboardingWindow.contentView = NSHostingView(rootView: OnboardingView())
-        onboardingWindow.center()
-        onboardingWindow.makeKeyAndOrderFront(nil)
+        window.title = "Welcome to Kotaeba"
+        window.contentView = NSHostingView(rootView: OnboardingView())
+        window.isReleasedWhenClosed = false
+        window.center()
+        window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        onboardingWindow = window
     }
 
     private func closeMainWindowIfNeeded() {
         if let window = NSApp.windows.first(where: { $0.identifier?.rawValue == "main" }) {
             window.close()
         }
+    }
+
+    private func closeOnboardingIfNeeded() {
+        onboardingWindow?.close()
+        onboardingWindow = nil
     }
     
     @objc private func quit() {
