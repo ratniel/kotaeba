@@ -5,7 +5,7 @@
 set -e  # Exit on error
 
 SUPPORT_DIR="$HOME/Library/Application Support/Kotaeba"
-VENV_DIR="$SUPPORT_DIR/venv"
+VENV_DIR="$SUPPORT_DIR/.venv"
 
 echo "🚀 Kotaeba Setup"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -17,10 +17,13 @@ cd "$SUPPORT_DIR"
 # Check if uv is installed
 if ! command -v uv &> /dev/null; then
     echo "📦 Installing uv package manager..."
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    
-    # Add to PATH for current session
-    export PATH="$HOME/.local/bin:$PATH"
+    if command -v brew &> /dev/null; then
+        brew install uv
+    else
+        echo "❌ uv is not installed and Homebrew is unavailable."
+        echo "   Please install uv manually (e.g. via Homebrew) and re-run setup."
+        exit 1
+    fi
 fi
 
 # Verify uv installation

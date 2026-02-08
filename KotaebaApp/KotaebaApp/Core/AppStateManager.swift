@@ -36,7 +36,7 @@ class AppStateManager: ObservableObject {
     private var webSocketClient: WebSocketClient?
     private var hotkeyManager: HotkeyManager?
     private var textInserter: TextInserter?
-    private var statisticsManager: StatisticsManager?
+    private let statisticsManager = StatisticsManager.shared
     
     // MARK: - Session Tracking
     
@@ -96,8 +96,6 @@ class AppStateManager: ObservableObject {
         serverManager = ServerManager()
         audioCapture = AudioCaptureManager()
         textInserter = TextInserter()
-        statisticsManager = StatisticsManager()
-        
         // Set up delegates
         audioCapture?.delegate = self
     }
@@ -196,7 +194,7 @@ class AppStateManager: ObservableObject {
         // Save session statistics
         if let startTime = sessionStartTime {
             let duration = Date().timeIntervalSince(startTime)
-            statisticsManager?.recordSession(
+            statisticsManager.recordSession(
                 wordCount: sessionWordCount,
                 duration: duration
             )
@@ -327,6 +325,10 @@ class AppStateManager: ObservableObject {
     }
 
     func setSelectedModel(_ model: Constants.Models.Model) async {
+        guard model.identifier != selectedModel.identifier else {
+            return
+        }
+
         selectedModel = model
         UserDefaults.standard.set(model.identifier, forKey: Constants.UserDefaultsKeys.selectedModel)
 
@@ -334,7 +336,7 @@ class AppStateManager: ObservableObject {
         await checkModelDownloadStatus()
 
         // If server is running, restart with new model
-        if state == .serverRunning {
+        if state == .serverRunning, modelDownloadStatus == .downloaded {
             Log.server.info("Restarting server with new model: \(model.name)")
             stopServer()
             await startServer()

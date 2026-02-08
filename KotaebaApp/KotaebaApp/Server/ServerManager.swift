@@ -44,10 +44,9 @@ class ServerManager {
             throw ServerError.setupRequired
         }
 
-        // Build command
-        // Using the venv's Python to run mlx_audio.server
+        // Build command using the venv's Python to run mlx_audio.server
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.executableURL = Constants.Setup.pythonPath
 
         // Set working directory to support directory (writable location)
         // This prevents "Read-only file system" errors when server tries to create logs/
@@ -60,11 +59,14 @@ class ServerManager {
         // Note: model is not passed at startup - it's sent via WebSocket config
         // This allows dynamic model switching without server restart
         process.arguments = [
-            "-c",
-            """
-            source "\(Constants.Setup.venvPath.path)/bin/activate" && \
-            python -m mlx_audio.server --host \(Constants.Server.host) --port \(Constants.Server.port) --log-dir "\(logsDir.path)"
-            """
+            "-m",
+            "mlx_audio.server",
+            "--host",
+            Constants.Server.host,
+            "--port",
+            String(Constants.Server.port),
+            "--log-dir",
+            logsDir.path
         ]
 
         // Capture output
@@ -232,19 +234,20 @@ class ServerManager {
         guard FileManager.default.fileExists(atPath: Constants.Setup.pythonPath.path) else {
             throw ServerError.setupRequired
         }
-
-        let command = """
-        source "\(Constants.Setup.venvPath.path)/bin/activate" && \
-        python -c "from mlx_audio.utils import load_model; load_model('\(modelIdentifier)')"
-        """
+        guard Constants.Models.availableModels.contains(where: { $0.identifier == modelIdentifier }) else {
+            throw ServerError.invalidModelIdentifier
+        }
 
         var lastProgress: Double = 0
         let percentRegex = try? NSRegularExpression(pattern: "(\\d{1,3})(?:\\.\\d+)?%")
-
-        try await ShellCommandRunner.run(command: command, currentDirectory: Constants.supportDirectory) { output in
-            Task { @MainActor in
-                Log.server.info(output)
-            }
+        let command = "from mlx_audio.utils import load_model; load_model('\(modelIdentifier)')"
+        let pythonURL = Constants.Setup.pythonPath
+        try await ShellCommandRunner.run(
+            executableURL: pythonURL,
+            arguments: ["-c", command],
+            currentDirectory: Constants.supportDirectory
+        ) { output in
+            Log.server.info(output)
 
             guard let percentRegex else { return }
             let range = NSRange(output.startIndex..<output.endIndex, in: output)
@@ -273,6 +276,7 @@ enum ServerError: LocalizedError {
     case failedToStart(String)
     case startupTimeout
     case healthCheckFailed
+    case invalidModelIdentifier
     
     var errorDescription: String? {
         switch self {
@@ -286,6 +290,8 @@ enum ServerError: LocalizedError {
             return "Server did not start within timeout period"
         case .healthCheckFailed:
             return "Server health check failed"
+        case .invalidModelIdentifier:
+            return "Invalid model identifier"
         }
     }
 }

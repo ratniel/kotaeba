@@ -186,17 +186,6 @@ struct FooterView: View {
                 .foregroundColor(Constants.UI.textSecondary.opacity(0.6))
 
             Spacer()
-
-            SettingsLink {
-                HStack(spacing: 6) {
-                    Image(systemName: "gearshape.fill")
-                        .font(.system(size: 12))
-                    Text("Settings")
-                        .font(.system(size: 13, weight: .medium))
-                }
-                .foregroundColor(Constants.UI.textSecondary)
-            }
-            .buttonStyle(.plain)
         }
     }
 }
