@@ -31,7 +31,7 @@ class AppStateManager: ObservableObject {
     
     // MARK: - Components
     
-    private var serverManager: ServerManager?
+    private var serverManager: ServerManaging?
     private var audioCapture: AudioCaptureManager?
     private var webSocketClient: WebSocketClient?
     private var hotkeyManager: HotkeyManager?
@@ -54,8 +54,32 @@ class AppStateManager: ObservableObject {
             await autoStartServer()
         }
     }
+
+    init(
+        serverManager: ServerManaging,
+        audioCapture: AudioCaptureManager? = nil,
+        textInserter: TextInserter? = nil,
+        statisticsManager: StatisticsManager? = nil,
+        shouldAutoStartServer: Bool = false
+    ) {
+        self.serverManager = serverManager
+        self.audioCapture = audioCapture
+        self.textInserter = textInserter
+        self.statisticsManager = statisticsManager
+        loadPreferences()
+
+        if shouldAutoStartServer {
+            Task {
+                await self.autoStartServer()
+            }
+        }
+    }
     
     private func loadPreferences() {
+        UserDefaults.standard.register(defaults: [
+            Constants.UserDefaultsKeys.safeModeEnabled: true
+        ])
+
         if let modeString = UserDefaults.standard.string(forKey: Constants.UserDefaultsKeys.recordingMode),
            let mode = RecordingMode(rawValue: modeString) {
             recordingMode = mode
@@ -108,7 +132,12 @@ class AppStateManager: ObservableObject {
     }
 
     func startServer() async {
-        guard state == .idle || state == .error("") else { return }
+        switch state {
+        case .idle, .error:
+            break
+        default:
+            return
+        }
 
         state = .serverStarting
 
@@ -134,6 +163,7 @@ class AppStateManager: ObservableObject {
     // MARK: - Recording Control
     
     func startRecording() {
+        Log.app.info("startRecording requested (state: \(state), mode: \(recordingMode))")
         guard state == .serverRunning else {
             Log.app.warning("Cannot start recording - server not running")
             return
@@ -151,6 +181,7 @@ class AppStateManager: ObservableObject {
     }
     
     func stopRecording() {
+        Log.app.info("stopRecording requested (state: \(state), mode: \(recordingMode))")
         guard state == .recording || state == .connecting else { return }
         
         // Stop audio first
@@ -179,6 +210,7 @@ class AppStateManager: ObservableObject {
     }
     
     func toggleRecording() {
+        Log.app.info("toggleRecording requested (state: \(state), mode: \(recordingMode))")
         if state == .recording || state == .connecting {
             stopRecording()
         } else if state == .serverRunning {
@@ -194,8 +226,8 @@ class AppStateManager: ObservableObject {
             Log.app.warning("Received empty transcription, ignoring")
             return
         }
-        
-        Log.app.info("Received transcription: \"\(trimmedText)\" (partial: \(isPartial))")
+
+        logTranscription(trimmedText, isPartial: isPartial)
         
         // Update displayed transcription
         currentTranscription = trimmedText
@@ -206,12 +238,13 @@ class AppStateManager: ObservableObject {
             // Count words
             let wordCount = trimmedText.split(separator: " ").count
             sessionWordCount += wordCount
-            
-            Log.textInsertion.info("Attempting to insert text: \"\(trimmedText)\" (\(wordCount) words)")
+
+            logInsertionAttempt(wordCount: wordCount, textLength: trimmedText.count)
             
             // Insert text at cursor
             if let inserter = textInserter {
-                performInsertion(text: trimmedText + " ", inserter: inserter)
+                let insertionText = sanitizeForInsertion(trimmedText) + " "
+                performInsertion(text: insertionText, inserter: inserter)
             } else {
                 Log.textInsertion.error("TextInserter is nil. Cannot insert text.")
                 lastInsertionError = "Text inserter not initialized."
@@ -229,7 +262,7 @@ class AppStateManager: ObservableObject {
             lastInsertionMethod = nil
             return
         }
-        performInsertion(text: text, inserter: inserter)
+        performInsertion(text: sanitizeForInsertion(text), inserter: inserter)
     }
 
     private func performInsertion(text: String, inserter: TextInserter) {
@@ -244,6 +277,29 @@ class AppStateManager: ObservableObject {
             lastInsertionMethod = nil
             Log.textInsertion.error("Text insertion failed: \(error.localizedDescription)")
         }
+    }
+
+    private func sanitizeForInsertion(_ text: String) -> String {
+        let isSafeModeEnabled = UserDefaults.standard.bool(forKey: Constants.UserDefaultsKeys.safeModeEnabled)
+        guard isSafeModeEnabled else { return text }
+        let sanitized = text.components(separatedBy: .newlines).joined(separator: " ")
+        return sanitized
+    }
+
+    private func logTranscription(_ text: String, isPartial: Bool) {
+        #if DEBUG
+        Log.app.info("Received transcription: \"\(text)\" (partial: \(isPartial))")
+        #else
+        Log.app.info("Received transcription (\(text.count) chars, partial: \(isPartial))")
+        #endif
+    }
+
+    private func logInsertionAttempt(wordCount: Int, textLength: Int) {
+        #if DEBUG
+        Log.textInsertion.info("Attempting to insert text (\(wordCount) words, \(textLength) chars)")
+        #else
+        Log.textInsertion.info("Attempting to insert text (\(wordCount) words)")
+        #endif
     }
     
     // MARK: - Model Management
@@ -349,6 +405,16 @@ class AppStateManager: ObservableObject {
         stopServer()
         hotkeyManager?.stop()
     }
+
+    /// Best-effort cleanup before app termination to avoid leaving server processes running.
+    func shutdownForTermination() async {
+        stopRecording()
+        webSocketClient?.disconnect()
+        audioCapture?.stopRecording()
+        await serverManager?.stopAndWait(timeout: 2.0)
+        hotkeyManager?.stop()
+        state = .idle
+    }
 }
 
 // MARK: - WebSocketClientDelegate
@@ -357,6 +423,7 @@ extension AppStateManager: WebSocketClientDelegate {
     
     nonisolated func webSocketDidConnect() {
         Task { @MainActor in
+            Log.websocket.info("webSocketDidConnect received (state: \(state))")
             Log.websocket.info("WebSocket connected, starting audio...")
 
             // Send configuration with selected model
@@ -377,6 +444,7 @@ extension AppStateManager: WebSocketClientDelegate {
     
     nonisolated func webSocketDidDisconnect(error: Error?) {
         Task { @MainActor in
+            Log.websocket.info("webSocketDidDisconnect received (state: \(state), error: \(error?.localizedDescription ?? "none"))")
             audioCapture?.stopRecording()
             if state == .recording || state == .connecting {
                 if let error = error {
@@ -431,6 +499,7 @@ extension AppStateManager: HotkeyManagerDelegate {
     
     nonisolated func hotkeyDidTriggerStart() {
         Task { @MainActor in
+            Log.hotkey.info("Hotkey start trigger received (mode: \(recordingMode), state: \(state))")
             if recordingMode == .toggle {
                 toggleRecording()
             } else {
@@ -441,6 +510,7 @@ extension AppStateManager: HotkeyManagerDelegate {
     
     nonisolated func hotkeyDidTriggerStop() {
         Task { @MainActor in
+            Log.hotkey.info("Hotkey stop trigger received (mode: \(recordingMode), state: \(state))")
             if recordingMode == .hold {
                 stopRecording()
             }
