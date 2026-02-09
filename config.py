@@ -5,7 +5,7 @@ from loguru import logger
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
+# MARK: Audio config
 class AudioConfig(BaseModel):
     """Audio processing configuration."""
 
@@ -35,11 +35,13 @@ class AudioConfig(BaseModel):
             raise ValueError("Chunk size must be a power of 2")
         return v
 
-
+# MARK: VAD config
 class VADConfig(BaseModel):
     """Voice Activity Detection configuration."""
 
-    enabled: bool = Field(default=True, description="Enable or disable VAD")
+    enabled: bool = Field(
+        default=True, description="Enable server-side voice activity detection"
+    )
     frame_duration_ms: int = Field(
         default=30, description="VAD frame size (10, 20, or 30ms)"
     )
@@ -62,17 +64,20 @@ class VADConfig(BaseModel):
             raise ValueError(f"Frame duration must be one of: {valid_durations}ms")
         return v
 
-
+# MARK: Settings
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", env_nested_delimiter="__"
+        env_file=".env",
+        env_file_encoding="utf-8",
+        env_nested_delimiter="__",
+        extra="ignore",
     )
 
     # Server Configuration
     STT_MODEL: str = Field(
-        default="mlx-community/whisper-large-v3-mlx", description="Whisper model to use"
+        default="mlx-community/Qwen3-ASR-0.6B-8bit", description="Whisper model to use"
     )
-    STT_HOST: str = Field(default="0.0.0.0", description="Server host")
+    STT_HOST: str = Field(default="127.0.0.1", description="Server host")
     STT_PORT: int = Field(default=8000, ge=1, le=65535, description="Server port")
 
     # Audio Configuration (nested)
