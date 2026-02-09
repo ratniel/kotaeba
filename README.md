@@ -65,6 +65,20 @@ The server supports:
 
 For the macOS app, keep sensitive values (such as `HF_TOKEN`) in Keychain via Settings, not in plain-text files.
 
+### 🔊 Advanced Configurations
+You can override audio and VAD settings using the double-underscore (`__`) prefix in your `.env` file:
+
+#### Audio Settings (`AUDIO__*`)
+- `AUDIO__RATE`: Sample rate (e.g., `16000`)
+- `AUDIO__CHANNELS`: Number of channels (`1` or `2`)
+- `AUDIO__CHUNK_SIZE`: Buffer size (e.g., `1024`)
+
+#### VAD Settings (`VAD__*`)
+- `VAD__ENABLED`: Enable/disable Voice Activity Detection (`True`/`False`)
+- `VAD__VAD_MODE`: Aggressiveness (0-3, where 3 is strictest)
+- `VAD__SILENCE_LIMIT_MS`: Duration of silence to trigger a message send (e.g., `1000`)
+
+
 ## 📂 Project Structure
 
 - `main.py`: Main entry point; manages the client-server lifecycle and audio streaming.
@@ -73,6 +87,43 @@ For the macOS app, keep sensitive values (such as `HF_TOKEN`) in Keychain via Se
 - `models/`: Pydantic models for WebSocket protocols.
 - `validation.py`: Pre-flight checks for audio devices and dependencies.
 - `recordings/`: Directory containing session history.
+
+---
+
+## 🍎 KotaebaApp - Native macOS Client
+
+For **global hotkey activation** and **text insertion anywhere on screen**, we're building a native Swift menubar app.
+
+### Features (Planned)
+- **Global Hotkey** (⌥Space) — trigger transcription from any app
+- **Push-to-Talk** or **Toggle** recording modes  
+- **Text Insertion** — transcribed text appears at your cursor
+- **Menubar Resident** — runs silently in the background
+
+### Documentation
+
+See the `KotaebaApp/` folder:
+- [`QUICKSTART.md`](KotaebaApp/QUICKSTART.md) — Get running in 15 minutes
+- [`ARCHITECTURE.md`](KotaebaApp/ARCHITECTURE.md) — System design & components
+- [`IMPLEMENTATION_GUIDE.md`](KotaebaApp/IMPLEMENTATION_GUIDE.md) — Step-by-step code guide
+
+### Architecture Overview
+
+```
+┌───────────────────────────────────────────────────────────┐
+│              KotaebaApp (Swift Menubar App)               │
+│  ⌥Space → Audio Capture → WebSocket → Text Insertion     │
+└───────────────────────────────────────────────────────────┘
+                            │
+                            │ WebSocket (ws://localhost:8000)
+                            ▼
+┌───────────────────────────────────────────────────────────┐
+│              Python Backend (This Repo)                   │
+│  MLX Whisper Server + VAD → Real-time Transcription      │
+└───────────────────────────────────────────────────────────┘
+```
+
+---
 
 ## 📄 License
 

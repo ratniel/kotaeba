@@ -101,7 +101,9 @@ class Settings(BaseSettings):
     LOG_COMPRESSION: str = Field(default="zip", description="Log compression format")
 
     # Recording Configuration
-    RECORDINGS_DIR: str = Field(default="recordings", description="Recordings directory")
+    RECORDINGS_DIR: str = Field(
+        default="recordings", description="Recordings directory"
+    )
 
 
 def validate_configuration() -> Settings:
