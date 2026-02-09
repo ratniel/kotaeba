@@ -220,7 +220,7 @@ class WebSocketSTTClient:
                     language=settings.LANGUAGE,
                     sample_rate=self.rate,
                     channels=self.channels,
-                    vad_enabled=True,
+                    vad_enabled=settings.vad.enabled,
                     vad_aggressiveness=settings.vad.vad_mode,
                 )
                 await websocket.send(config.model_dump_json())

@@ -5,15 +5,18 @@ struct SettingsView: View {
     @EnvironmentObject var stateManager: AppStateManager
     @AppStorage(Constants.UserDefaultsKeys.autoStartServer) private var autoStartServer = false
     @AppStorage(Constants.UserDefaultsKeys.launchAtLogin) private var launchAtLogin = false
+    @AppStorage(Constants.UserDefaultsKeys.serverHost) private var serverHost = Constants.Server.defaultHost
+    @AppStorage(Constants.UserDefaultsKeys.serverPort) private var serverPort = Constants.Server.defaultPort
     @AppStorage(Constants.UserDefaultsKeys.useClipboardFallback) private var useClipboardFallback = false
     @AppStorage(Constants.UserDefaultsKeys.safeModeEnabled) private var safeModeEnabled = true
-    @AppStorage(Constants.UserDefaultsKeys.language) private var language = "en"
     
     var body: some View {
         TabView {
             GeneralSettingsView(
                 autoStartServer: $autoStartServer,
-                launchAtLogin: $launchAtLogin
+                launchAtLogin: $launchAtLogin,
+                serverHost: $serverHost,
+                serverPort: $serverPort
             )
             .tabItem {
                 Label("General", systemImage: "gear")
@@ -25,7 +28,6 @@ struct SettingsView: View {
                 }
             
             TranscriptionSettingsView(
-                language: $language,
                 useClipboardFallback: $useClipboardFallback,
                 safeModeEnabled: $safeModeEnabled
             )
@@ -47,6 +49,11 @@ struct SettingsView: View {
 struct GeneralSettingsView: View {
     @Binding var autoStartServer: Bool
     @Binding var launchAtLogin: Bool
+    @Binding var serverHost: String
+    @Binding var serverPort: Int
+    @State private var tokenDraft = ""
+    @State private var hasStoredToken = false
+    @State private var keychainMessage: String?
     
     var body: some View {
         Form {
@@ -62,24 +69,81 @@ struct GeneralSettingsView: View {
             }
             
             Section {
-                HStack {
-                    Text("Server Address")
-                    Spacer()
-                    Text("\(Constants.Server.host):\(Constants.Server.port)")
-                        .foregroundColor(.secondary)
+                TextField("Host", text: $serverHost)
+
+                Stepper(value: $serverPort, in: 1...65535) {
+                    HStack {
+                        Text("Port")
+                        Spacer()
+                        Text("\(serverPort)")
+                            .foregroundColor(.secondary)
+                    }
                 }
             } header: {
                 Text("Server")
             }
+
+            Section {
+                SecureField("Hugging Face token (optional)", text: $tokenDraft)
+
+                HStack {
+                    Button("Save Token") {
+                        saveToken()
+                    }
+                    .disabled(tokenDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                    Button("Clear Token") {
+                        clearToken()
+                    }
+                    .disabled(!hasStoredToken)
+                }
+
+                Text(hasStoredToken ? "A token is stored securely in Keychain." : "No token stored.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                if let keychainMessage {
+                    Text(keychainMessage)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            } header: {
+                Text("Authentication")
+            }
         }
         .formStyle(.grouped)
         .padding()
+        .onAppear {
+            hasStoredToken = KeychainSecretStore.string(for: Constants.SecureSettingsKeys.huggingFaceToken) != nil
+        }
     }
     
     private func setLaunchAtLogin(_ enabled: Bool) {
         // TODO: Implement launch at login using SMLoginItemSetEnabled
         // This requires additional setup with a helper app
         Log.ui.info("Launch at login: \(enabled)")
+    }
+
+    private func saveToken() {
+        do {
+            let token = tokenDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+            try KeychainSecretStore.upsert(token, for: Constants.SecureSettingsKeys.huggingFaceToken)
+            tokenDraft = ""
+            hasStoredToken = true
+            keychainMessage = "Token saved."
+        } catch {
+            keychainMessage = error.localizedDescription
+        }
+    }
+
+    private func clearToken() {
+        do {
+            try KeychainSecretStore.delete(Constants.SecureSettingsKeys.huggingFaceToken)
+            hasStoredToken = false
+            keychainMessage = "Token removed."
+        } catch {
+            keychainMessage = error.localizedDescription
+        }
     }
 }
 
@@ -127,41 +191,11 @@ struct HotkeySettingsView: View {
 // MARK: - Transcription Settings
 
 struct TranscriptionSettingsView: View {
-    @Binding var language: String
     @Binding var useClipboardFallback: Bool
     @Binding var safeModeEnabled: Bool
     
-    private let languages = [
-        ("en", "English"),
-        ("es", "Spanish"),
-        ("fr", "French"),
-        ("de", "German"),
-        ("it", "Italian"),
-        ("pt", "Portuguese"),
-        ("ja", "Japanese"),
-        ("ko", "Korean"),
-        ("zh", "Chinese"),
-        ("auto", "Auto-detect")
-    ]
-    
     var body: some View {
         Form {
-            Section {
-                Picker("Language", selection: $language) {
-                    ForEach(languages, id: \.0) { code, name in
-                        Text(name).tag(code)
-                    }
-                }
-                
-                if language == "auto" {
-                    Text("Auto-detect adds slight latency but works for multilingual input")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            } header: {
-                Text("Language")
-            }
-            
             Section {
                 Toggle("Safe mode (prevent newlines)", isOn: $safeModeEnabled)
 

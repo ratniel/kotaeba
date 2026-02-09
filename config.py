@@ -39,6 +39,9 @@ class AudioConfig(BaseModel):
 class VADConfig(BaseModel):
     """Voice Activity Detection configuration."""
 
+    enabled: bool = Field(
+        default=True, description="Enable server-side voice activity detection"
+    )
     frame_duration_ms: int = Field(
         default=30, description="VAD frame size (10, 20, or 30ms)"
     )
@@ -63,7 +66,12 @@ class VADConfig(BaseModel):
 
 # MARK: Settings
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        env_nested_delimiter="__",
+        extra="ignore",
+    )
 
     # Server Configuration
     STT_MODEL: str = Field(

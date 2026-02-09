@@ -46,11 +46,24 @@ uv run main.py
 
 ## ⚙️ Configuration
 
-Customize the application via environment variables or a `.env` file:
+Copy `.env.example` to `.env` and customize as needed:
 
-- `STT_MODEL`: Whisper model (default: `mlx-community/whisper-large-v3-mlx`)
+```bash
+cp .env.example .env
+```
+
+The server supports:
+
+- `STT_MODEL`: Whisper model (default: `mlx-community/Qwen3-ASR-0.6B-8bit`)
+- `STT_HOST` / `STT_PORT`: Server bind address/port
 - `LANGUAGE`: Transcription language (default: `en`)
+- `AUDIO__*`: Audio capture and streaming settings
+- `VAD__*`: Voice activity detection settings
+- `LOG_*`: Logging destination and rotation
 - `RECORDINGS_DIR`: Output directory for sessions (default: `recordings`)
+- `HF_TOKEN` / `HUGGINGFACE_HUB_TOKEN` (optional): Hugging Face auth token for private or gated models
+
+For the macOS app, keep sensitive values (such as `HF_TOKEN`) in Keychain via Settings, not in plain-text files.
 
 ## 📂 Project Structure
 

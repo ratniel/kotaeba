@@ -89,3 +89,23 @@ enum ShellCommandError: LocalizedError {
         }
     }
 }
+
+enum ServerEnvironment {
+    static func build(model: String? = nil) -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        environment["STT_HOST"] = Constants.Server.host
+        environment["STT_PORT"] = String(Constants.Server.port)
+
+        if let model {
+            environment["STT_MODEL"] = model
+        }
+
+        if let token = KeychainSecretStore.string(for: Constants.SecureSettingsKeys.huggingFaceToken),
+           !token.isEmpty {
+            environment["HF_TOKEN"] = token
+            environment["HUGGINGFACE_HUB_TOKEN"] = token
+        }
+
+        return environment
+    }
+}

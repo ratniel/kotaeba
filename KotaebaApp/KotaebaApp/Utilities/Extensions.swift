@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import SwiftUI
 
 // MARK: - Date Extensions
@@ -119,6 +120,85 @@ extension UserDefaults {
     func getCodable<T: Codable>(_ type: T.Type, forKey key: String) -> T? {
         guard let data = data(forKey: key) else { return nil }
         return try? JSONDecoder().decode(type, from: data)
+    }
+}
+
+// MARK: - Keychain
+
+enum KeychainSecretStore {
+    private static var service: String {
+        Bundle.main.bundleIdentifier ?? "KotaebaApp"
+    }
+
+    static func string(for key: String) -> String? {
+        var query = baseQuery(for: key)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+
+        guard status != errSecItemNotFound else {
+            return nil
+        }
+
+        guard status == errSecSuccess,
+              let data = item as? Data,
+              let value = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+
+        return value
+    }
+
+    static func upsert(_ value: String, for key: String) throws {
+        guard let data = value.data(using: .utf8) else { return }
+        let query = baseQuery(for: key)
+        let attributes: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        ]
+
+        let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        if status == errSecItemNotFound {
+            var addQuery = query
+            addQuery.merge(attributes) { _, new in new }
+            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+            guard addStatus == errSecSuccess else {
+                throw KeychainStoreError.unhandled(addStatus)
+            }
+            return
+        }
+
+        guard status == errSecSuccess else {
+            throw KeychainStoreError.unhandled(status)
+        }
+    }
+
+    static func delete(_ key: String) throws {
+        let status = SecItemDelete(baseQuery(for: key) as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw KeychainStoreError.unhandled(status)
+        }
+    }
+
+    private static func baseQuery(for key: String) -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key
+        ]
+    }
+}
+
+enum KeychainStoreError: LocalizedError {
+    case unhandled(OSStatus)
+
+    var errorDescription: String? {
+        switch self {
+        case .unhandled(let status):
+            return "Keychain operation failed (\(status))"
+        }
     }
 }
 

@@ -12,8 +12,23 @@ enum Constants {
     
     // MARK: - Server
     enum Server {
-        static let host = "localhost"
-        static let port = 8000  // Changed from 8765 to match mlx_audio.server default
+        static let defaultHost = "localhost"
+        static let defaultPort = 8000
+        static var host: String {
+            let stored = UserDefaults.standard.string(forKey: UserDefaultsKeys.serverHost)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if let stored, !stored.isEmpty {
+                return stored
+            }
+            return defaultHost
+        }
+        static var port: Int {
+            let stored = UserDefaults.standard.integer(forKey: UserDefaultsKeys.serverPort)
+            if (1...65535).contains(stored) {
+                return stored
+            }
+            return defaultPort
+        }
         static let websocketPath = "/v1/audio/transcriptions/realtime"
         static var websocketURL: URL {
             URL(string: "ws://\(host):\(port)\(websocketPath)")!
@@ -116,7 +131,8 @@ enum Constants {
         static let recordingMode = "recordingMode"
         static let hotkeyKeyCode = "hotkeyKeyCode"
         static let hotkeyModifiers = "hotkeyModifiers"
-        static let language = "language"
+        static let serverHost = "serverHost"
+        static let serverPort = "serverPort"
         static let autoStartServer = "autoStartServer"
         static let launchAtLogin = "launchAtLogin"
         static let useClipboardFallback = "useClipboardFallback"
@@ -124,6 +140,11 @@ enum Constants {
         static let selectedAudioDevice = "selectedAudioDevice"
         static let selectedModel = "selectedModel"
         static let didAutoDownloadDefaultModel = "didAutoDownloadDefaultModel"
+    }
+
+    // MARK: - Secure Settings Keys
+    enum SecureSettingsKeys {
+        static let huggingFaceToken = "HF_TOKEN"
     }
 }
 
