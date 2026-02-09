@@ -173,7 +173,8 @@ class SetupManager: ObservableObject {
         try await ShellCommandRunner.run(
             executableURL: pythonURL,
             arguments: ["-c", command],
-            currentDirectory: Constants.supportDirectory
+            currentDirectory: Constants.supportDirectory,
+            environment: ServerEnvironment.build(model: Constants.Models.defaultModel.identifier)
         ) { output in
             Log.setup.info(output)
         }

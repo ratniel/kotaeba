@@ -36,7 +36,7 @@ class AppStateManager: ObservableObject {
     private var webSocketClient: WebSocketClient?
     private var hotkeyManager: HotkeyManager?
     private var textInserter: TextInserter?
-    private let statisticsManager = StatisticsManager.shared
+    private let statisticsManager: StatisticsManager
     
     // MARK: - Session Tracking
     
@@ -46,6 +46,7 @@ class AppStateManager: ObservableObject {
     // MARK: - Initialization
 
     private init() {
+        self.statisticsManager = .shared
         loadPreferences()
         setupComponents()
 
@@ -62,10 +63,10 @@ class AppStateManager: ObservableObject {
         statisticsManager: StatisticsManager? = nil,
         shouldAutoStartServer: Bool = false
     ) {
+        self.statisticsManager = statisticsManager ?? .shared
         self.serverManager = serverManager
         self.audioCapture = audioCapture
         self.textInserter = textInserter
-        self.statisticsManager = statisticsManager
         loadPreferences()
 
         if shouldAutoStartServer {
@@ -77,7 +78,9 @@ class AppStateManager: ObservableObject {
     
     private func loadPreferences() {
         UserDefaults.standard.register(defaults: [
-            Constants.UserDefaultsKeys.safeModeEnabled: true
+            Constants.UserDefaultsKeys.safeModeEnabled: true,
+            Constants.UserDefaultsKeys.serverHost: Constants.Server.defaultHost,
+            Constants.UserDefaultsKeys.serverPort: Constants.Server.defaultPort
         ])
 
         if let modeString = UserDefaults.standard.string(forKey: Constants.UserDefaultsKeys.recordingMode),

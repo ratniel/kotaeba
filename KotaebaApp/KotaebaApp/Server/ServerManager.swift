@@ -68,6 +68,7 @@ class ServerManager {
             "--log-dir",
             logsDir.path
         ]
+        process.environment = ServerEnvironment.build(model: model)
 
         // Capture output
         let outputPipe = Pipe()
@@ -245,7 +246,8 @@ class ServerManager {
         try await ShellCommandRunner.run(
             executableURL: pythonURL,
             arguments: ["-c", command],
-            currentDirectory: Constants.supportDirectory
+            currentDirectory: Constants.supportDirectory,
+            environment: ServerEnvironment.build(model: modelIdentifier)
         ) { output in
             Log.server.info(output)
 
