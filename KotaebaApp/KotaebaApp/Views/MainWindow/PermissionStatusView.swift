@@ -113,6 +113,9 @@ struct PermissionStatusView: View {
         .onAppear {
             permissionStatus = PermissionManager.getPermissionStatus()
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            permissionStatus = PermissionManager.getPermissionStatus()
+        }
     }
 }
 

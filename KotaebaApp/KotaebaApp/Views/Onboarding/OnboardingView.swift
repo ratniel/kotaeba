@@ -76,6 +76,9 @@ struct OnboardingView: View {
             .padding(40)
         }
         .preferredColorScheme(.dark)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            permissionStatus = PermissionManager.getPermissionStatus()
+        }
     }
 }
 
