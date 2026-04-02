@@ -3,8 +3,18 @@ import XCTest
 
 @MainActor
 final class StatisticsManagerTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        StatisticsManager.shared.clearAllData()
+    }
+
+    override func tearDown() {
+        StatisticsManager.shared.clearAllData()
+        super.tearDown()
+    }
+
     func testTodayCacheUpdatesOnRecordSession() {
-        let manager = StatisticsManager(storeInMemory: true)
+        let manager = StatisticsManager.shared
         let now = Date()
 
         _ = manager.getTodayStats(currentDate: now)
@@ -16,7 +26,7 @@ final class StatisticsManagerTests: XCTestCase {
     }
 
     func testTodayCacheResetsOnDateChange() {
-        let manager = StatisticsManager(storeInMemory: true)
+        let manager = StatisticsManager.shared
         let now = Date()
 
         manager.recordSession(wordCount: 3, duration: 5, now: now)

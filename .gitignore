@@ -42,15 +42,19 @@ __pycache__/
 .dist-info/
 .venv/
 .env
+dist/
 
 # Logs
 logs/
+recordings/
+*.wav
 
 # Editors and tooling
 .vscode/
 .cursor/
 .opencode/
 .specstory/
+.playwright-mcp/
 
 # Temp
 *.tmp

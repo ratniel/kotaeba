@@ -2,6 +2,7 @@ import XCTest
 @testable import KotaebaApp
 
 final class ClientConfigEncodingTests: XCTestCase {
+    @MainActor
     func testEncodingUsesSnakeCaseKeys() throws {
         let config = ClientConfig.with(model: "test-model")
         let data = try JSONEncoder().encode(config)

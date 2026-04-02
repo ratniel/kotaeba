@@ -15,13 +15,13 @@ struct KotaebaApp: App {
     @StateObject private var stateManager = AppStateManager.shared
     
     // SwiftData container for statistics persistence
-    var sharedModelContainer: ModelContainer = {
+    private static let sharedModelContainer: ModelContainer = {
         let schema = Schema([
             TranscriptionSession.self,
         ])
         let modelConfiguration = ModelConfiguration(
             schema: schema,
-            isStoredInMemoryOnly: false
+            isStoredInMemoryOnly: Constants.Runtime.isRunningTests
         )
         do {
             return try ModelContainer(for: schema, configurations: [modelConfiguration])
@@ -47,20 +47,28 @@ struct KotaebaApp: App {
     var body: some Scene {
         // Main settings/stats window
         Window("Kotaeba", id: "main") {
-            MainWindowView()
-                .environmentObject(stateManager)
+            if Constants.Runtime.isRunningTests {
+                EmptyView()
+            } else {
+                MainWindowView()
+                    .environmentObject(stateManager)
+            }
         }
-        .modelContainer(sharedModelContainer)
+        .modelContainer(Self.sharedModelContainer)
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
         .defaultPosition(.center)
         
         // Settings window (accessible via Preferences menu item)
         Settings {
-            SettingsView()
-                .environmentObject(stateManager)
-                .frame(width: 520, height: 420)
+            if Constants.Runtime.isRunningTests {
+                EmptyView()
+            } else {
+                SettingsView()
+                    .environmentObject(stateManager)
+                    .frame(width: 520, height: 420)
+            }
         }
-        .modelContainer(sharedModelContainer)
+        .modelContainer(Self.sharedModelContainer)
     }
 }

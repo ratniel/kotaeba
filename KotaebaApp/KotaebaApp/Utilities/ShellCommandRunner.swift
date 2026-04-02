@@ -26,7 +26,7 @@ enum ShellCommandRunner {
             process.standardError = errorPipe
 
             let outputQueue = DispatchQueue(label: "ShellCommandRunner.output")
-            var capturedError = ""
+            let outputState = CommandOutputState()
 
             let handleOutput: (Data) -> Void = { data in
                 guard let output = String(data: data, encoding: .utf8), !output.isEmpty else { return }
@@ -41,7 +41,7 @@ enum ShellCommandRunner {
             let handleError: (Data) -> Void = { data in
                 guard let output = String(data: data, encoding: .utf8), !output.isEmpty else { return }
                 outputQueue.sync {
-                    capturedError.append(output)
+                    outputState.capturedError.append(output)
                 }
                 let lines = output.split(whereSeparator: \.isNewline).map(String.init)
                 outputQueue.sync {
@@ -65,7 +65,9 @@ enum ShellCommandRunner {
                 if process.terminationStatus == 0 {
                     continuation.resume()
                 } else {
-                    let message = capturedError.isEmpty ? "Unknown error" : capturedError
+                    let message = outputQueue.sync {
+                        outputState.capturedError.isEmpty ? "Unknown error" : outputState.capturedError
+                    }
                     continuation.resume(throwing: ShellCommandError.commandFailed(message, process.terminationStatus))
                 }
             }
@@ -77,6 +79,10 @@ enum ShellCommandRunner {
             }
         }
     }
+}
+
+private final class CommandOutputState: @unchecked Sendable {
+    nonisolated(unsafe) var capturedError = ""
 }
 
 enum ShellCommandError: LocalizedError {

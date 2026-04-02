@@ -20,6 +20,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - App Lifecycle
     
     func applicationDidFinishLaunching(_ notification: Notification) {
+        guard !Constants.Runtime.isRunningTests else {
+            return
+        }
+
         setupMenubar()
         setupRecordingBar()
         observeStateChanges()

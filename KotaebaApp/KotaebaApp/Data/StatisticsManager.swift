@@ -6,15 +6,15 @@ import SwiftData
 /// Uses SwiftData to store session data and compute aggregated statistics.
 class StatisticsManager {
 
-    static let shared = StatisticsManager()
+    static let shared = StatisticsManager(storeInMemory: Constants.Runtime.isRunningTests)
 
     // MARK: - Properties
 
     private var modelContainer: ModelContainer?
     private var modelContext: ModelContext?
-    private let defaults = UserDefaults.standard
-    private let calendar = Calendar.current
+    private let cacheDefaults: UserDefaults?
     private let storeInMemory: Bool
+    private var inMemorySessions: [InMemorySession] = []
     private(set) var isAvailable = true
     private(set) var lastError: Error?
 
@@ -29,20 +29,39 @@ class StatisticsManager {
         static let todaySessionCount = "statsTodaySessionCount"
     }
 
+    private struct InMemorySession {
+        let startTime: Date
+        let endTime: Date?
+        let wordCount: Int
+        let duration: TimeInterval
+        let transcribedText: String?
+        let language: String
+    }
+
     private let cacheVersion = 1
     private var cachedTotal: AggregatedStats = .empty
     private var cachedToday: AggregatedStats = .empty
     private var cachedTodayDate: Date?
+    private var calendar: Calendar { .current }
 
     // MARK: - Initialization
 
     init(storeInMemory: Bool = false) {
         self.storeInMemory = storeInMemory
+        self.cacheDefaults = storeInMemory ? nil : UserDefaults.standard
         setupModelContainer()
         loadCachedStats()
     }
 
     private func setupModelContainer() {
+        guard !storeInMemory else {
+            modelContainer = nil
+            modelContext = nil
+            isAvailable = true
+            lastError = nil
+            return
+        }
+
         do {
             let schema = Schema([TranscriptionSession.self])
             let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: storeInMemory)
@@ -61,6 +80,13 @@ class StatisticsManager {
     }
 
     private func loadCachedStats() {
+        guard let defaults = cacheDefaults else {
+            cachedTotal = .empty
+            cachedTodayDate = calendar.startOfDay(for: Date())
+            cachedToday = .empty
+            return
+        }
+
         let version = defaults.integer(forKey: CacheKeys.version)
         if version != cacheVersion {
             rebuildCaches()
@@ -91,6 +117,10 @@ class StatisticsManager {
     }
 
     private func hasAnySessions() -> Bool {
+        if storeInMemory {
+            return !inMemorySessions.isEmpty
+        }
+
         guard let context = modelContext else { return false }
         do {
             var descriptor = FetchDescriptor<TranscriptionSession>()
@@ -104,6 +134,7 @@ class StatisticsManager {
     }
 
     private func persistTotalCache() {
+        guard let defaults = cacheDefaults else { return }
         defaults.set(cacheVersion, forKey: CacheKeys.version)
         defaults.set(cachedTotal.totalWords, forKey: CacheKeys.totalWords)
         defaults.set(cachedTotal.totalDuration, forKey: CacheKeys.totalDuration)
@@ -111,6 +142,7 @@ class StatisticsManager {
     }
 
     private func persistTodayCache() {
+        guard let defaults = cacheDefaults else { return }
         defaults.set(cachedTodayDate, forKey: CacheKeys.todayDate)
         defaults.set(cachedToday.totalWords, forKey: CacheKeys.todayWords)
         defaults.set(cachedToday.totalDuration, forKey: CacheKeys.todayDuration)
@@ -124,10 +156,15 @@ class StatisticsManager {
     }
 
     private func rebuildCaches() {
+        if storeInMemory {
+            rebuildCachesFromSessions(inMemorySessions, currentDate: Date())
+            return
+        }
+
         guard let context = modelContext else {
             cachedTotal = .empty
             cachedToday = .empty
-            cachedTodayDate = Date()
+            cachedTodayDate = calendar.startOfDay(for: Date())
             persistTotalCache()
             persistTodayCache()
             return
@@ -136,43 +173,45 @@ class StatisticsManager {
         do {
             let descriptor = FetchDescriptor<TranscriptionSession>()
             let sessions = try context.fetch(descriptor)
-
-            let startOfDay = calendar.startOfDay(for: Date())
-            var totalWords = 0
-            var totalDuration: TimeInterval = 0
-            var totalSessions = 0
-            var todayWords = 0
-            var todayDuration: TimeInterval = 0
-            var todaySessions = 0
-
-            for session in sessions {
-                totalWords += session.wordCount
-                totalDuration += session.duration
-                totalSessions += 1
-
-                if session.startTime >= startOfDay {
-                    todayWords += session.wordCount
-                    todayDuration += session.duration
-                    todaySessions += 1
-                }
+            let snapshots = sessions.map { session in
+                InMemorySession(
+                    startTime: session.startTime,
+                    endTime: session.endTime,
+                    wordCount: session.wordCount,
+                    duration: session.duration,
+                    transcribedText: session.transcribedText,
+                    language: session.language
+                )
             }
-
-            cachedTotal = AggregatedStats(
-                totalWords: totalWords,
-                totalDuration: totalDuration,
-                sessionCount: totalSessions
-            )
-            cachedToday = AggregatedStats(
-                totalWords: todayWords,
-                totalDuration: todayDuration,
-                sessionCount: todaySessions
-            )
-            cachedTodayDate = Date()
-            persistTotalCache()
-            persistTodayCache()
+            rebuildCachesFromSessions(snapshots, currentDate: Date())
         } catch {
             Log.stats.error("Failed to rebuild stats cache: \(error)")
         }
+    }
+
+    private func rebuildCachesFromSessions(_ sessions: [InMemorySession], currentDate: Date) {
+        let startOfDay = calendar.startOfDay(for: currentDate)
+        let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay) ?? startOfDay
+
+        let totalWords = sessions.reduce(0) { $0 + $1.wordCount }
+        let totalDuration = sessions.reduce(0.0) { $0 + $1.duration }
+        let todaySessions = sessions.filter { session in
+            session.startTime >= startOfDay && session.startTime < endOfDay
+        }
+
+        cachedTotal = AggregatedStats(
+            totalWords: totalWords,
+            totalDuration: totalDuration,
+            sessionCount: sessions.count
+        )
+        cachedToday = AggregatedStats(
+            totalWords: todaySessions.reduce(0) { $0 + $1.wordCount },
+            totalDuration: todaySessions.reduce(0.0) { $0 + $1.duration },
+            sessionCount: todaySessions.count
+        )
+        cachedTodayDate = startOfDay
+        persistTotalCache()
+        persistTodayCache()
     }
 
     // MARK: - Session Recording
@@ -185,6 +224,20 @@ class StatisticsManager {
         language: String = "en",
         now: Date = Date()
     ) {
+        if storeInMemory {
+            let session = InMemorySession(
+                startTime: now.addingTimeInterval(-duration),
+                endTime: now,
+                wordCount: wordCount,
+                duration: duration,
+                transcribedText: text,
+                language: language
+            )
+            inMemorySessions.append(session)
+            updateCachesForRecordedSession(wordCount: wordCount, duration: duration, now: now)
+            return
+        }
+
         guard let context = modelContext else {
             Log.stats.error("Model context not available")
             return
@@ -204,28 +257,31 @@ class StatisticsManager {
         do {
             try context.save()
             Log.stats.info("Session recorded: \(wordCount) words, \(Int(duration))s")
-
-            cachedTotal = AggregatedStats(
-                totalWords: cachedTotal.totalWords + wordCount,
-                totalDuration: cachedTotal.totalDuration + duration,
-                sessionCount: cachedTotal.sessionCount + 1
-            )
-            persistTotalCache()
-
-            let startOfDay = calendar.startOfDay(for: now)
-            if cachedTodayDate != startOfDay {
-                resetTodayCache(for: startOfDay)
-            }
-
-            cachedToday = AggregatedStats(
-                totalWords: cachedToday.totalWords + wordCount,
-                totalDuration: cachedToday.totalDuration + duration,
-                sessionCount: cachedToday.sessionCount + 1
-            )
-            persistTodayCache()
+            updateCachesForRecordedSession(wordCount: wordCount, duration: duration, now: now)
         } catch {
             Log.stats.error("Failed to save session: \(error)")
         }
+    }
+
+    private func updateCachesForRecordedSession(wordCount: Int, duration: TimeInterval, now: Date) {
+        cachedTotal = AggregatedStats(
+            totalWords: cachedTotal.totalWords + wordCount,
+            totalDuration: cachedTotal.totalDuration + duration,
+            sessionCount: cachedTotal.sessionCount + 1
+        )
+        persistTotalCache()
+
+        let startOfDay = calendar.startOfDay(for: now)
+        if cachedTodayDate != startOfDay {
+            resetTodayCache(for: startOfDay)
+        }
+
+        cachedToday = AggregatedStats(
+            totalWords: cachedToday.totalWords + wordCount,
+            totalDuration: cachedToday.totalDuration + duration,
+            sessionCount: cachedToday.sessionCount + 1
+        )
+        persistTodayCache()
     }
 
     // MARK: - Statistics Retrieval
@@ -257,6 +313,17 @@ class StatisticsManager {
 
     /// Get statistics for a specific date range
     func getStats(from startDate: Date, to endDate: Date) -> AggregatedStats {
+        if storeInMemory {
+            let sessions = inMemorySessions.filter { session in
+                session.startTime >= startDate && session.startTime <= endDate
+            }
+            return AggregatedStats(
+                totalWords: sessions.reduce(0) { $0 + $1.wordCount },
+                totalDuration: sessions.reduce(0.0) { $0 + $1.duration },
+                sessionCount: sessions.count
+            )
+        }
+
         guard let context = modelContext else {
             return .empty
         }
@@ -284,6 +351,24 @@ class StatisticsManager {
 
     /// Get recent sessions (for history display)
     func getRecentSessions(limit: Int = 10) -> [TranscriptionSession] {
+        if storeInMemory {
+            return Array(
+                inMemorySessions
+                    .sorted { $0.startTime > $1.startTime }
+                    .prefix(limit)
+                    .map { session in
+                        TranscriptionSession(
+                            startTime: session.startTime,
+                            endTime: session.endTime,
+                            wordCount: session.wordCount,
+                            duration: session.duration,
+                            transcribedText: session.transcribedText,
+                            language: session.language
+                        )
+                    }
+            )
+        }
+
         guard let context = modelContext else {
             return []
         }
@@ -304,6 +389,14 @@ class StatisticsManager {
 
     /// Clear all session data
     func clearAllData() {
+        if storeInMemory {
+            inMemorySessions.removeAll()
+            cachedTotal = .empty
+            resetTodayCache(for: Date())
+            persistTotalCache()
+            return
+        }
+
         guard let context = modelContext else { return }
 
         do {

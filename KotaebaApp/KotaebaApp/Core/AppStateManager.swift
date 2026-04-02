@@ -48,11 +48,15 @@ class AppStateManager: ObservableObject {
     private init() {
         self.statisticsManager = .shared
         loadPreferences()
-        setupComponents()
+        if !Constants.Runtime.isRunningTests {
+            setupComponents()
+        }
 
         // Auto-start server on app launch for instant hotkey response
-        Task {
-            await autoStartServer()
+        if !Constants.Runtime.isRunningTests {
+            Task {
+                await autoStartServer()
+            }
         }
     }
 
