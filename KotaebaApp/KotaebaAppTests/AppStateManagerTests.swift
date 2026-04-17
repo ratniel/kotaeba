@@ -1,0 +1,63 @@
+import XCTest
+@testable import KotaebaApp
+
+@MainActor
+final class AppStateManagerTests: XCTestCase {
+    func testAutoStartIsSkippedDuringTests() async {
+        let mockServer = MockServerManager()
+
+        _ = AppStateManager(serverManager: mockServer, shouldAutoStartServer: true)
+
+        await Task.yield()
+
+        XCTAssertFalse(mockServer.startCalled)
+    }
+
+    func testStartServerUpdatesState() async {
+        let mockServer = MockServerManager()
+        let manager = AppStateManager(serverManager: mockServer, shouldAutoStartServer: false)
+
+        XCTAssertEqual(manager.state, AppState.idle)
+
+        await manager.startServer()
+
+        XCTAssertTrue(mockServer.startCalled)
+        XCTAssertEqual(manager.state, AppState.serverRunning)
+    }
+
+    func testStopServerUpdatesState() async {
+        let mockServer = MockServerManager()
+        let manager = AppStateManager(serverManager: mockServer, shouldAutoStartServer: false)
+
+        await manager.startServer()
+        manager.stopServer()
+
+        XCTAssertTrue(mockServer.stopCalled)
+        XCTAssertEqual(manager.state, AppState.idle)
+    }
+}
+
+private final class MockServerManager: ServerManaging {
+    private(set) var startCalled = false
+    private(set) var stopCalled = false
+
+    func start(model: String) async throws {
+        startCalled = true
+    }
+
+    func stop() {
+        stopCalled = true
+    }
+
+    func stopAndWait(timeout: TimeInterval) async {
+        stop()
+    }
+
+    func checkModelExists(_ modelIdentifier: String) async throws -> Bool {
+        return true
+    }
+
+    func downloadModel(_ modelIdentifier: String, progressHandler: ((Double) -> Void)?) async throws {
+        progressHandler?(1.0)
+    }
+}
