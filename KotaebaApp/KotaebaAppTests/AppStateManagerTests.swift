@@ -3,27 +3,37 @@ import XCTest
 
 @MainActor
 final class AppStateManagerTests: XCTestCase {
+    func testAutoStartIsSkippedDuringTests() async {
+        let mockServer = MockServerManager()
+
+        _ = AppStateManager(serverManager: mockServer, shouldAutoStartServer: true)
+
+        await Task.yield()
+
+        XCTAssertFalse(mockServer.startCalled)
+    }
+
     func testStartServerUpdatesState() async {
         let mockServer = MockServerManager()
-        let manager = AppStateManager(serverManager: mockServer, autoStartServer: false)
+        let manager = AppStateManager(serverManager: mockServer, shouldAutoStartServer: false)
 
-        XCTAssertEqual(manager.state, .idle)
+        XCTAssertEqual(manager.state, AppState.idle)
 
         await manager.startServer()
 
         XCTAssertTrue(mockServer.startCalled)
-        XCTAssertEqual(manager.state, .serverRunning)
+        XCTAssertEqual(manager.state, AppState.serverRunning)
     }
 
     func testStopServerUpdatesState() async {
         let mockServer = MockServerManager()
-        let manager = AppStateManager(serverManager: mockServer, autoStartServer: false)
+        let manager = AppStateManager(serverManager: mockServer, shouldAutoStartServer: false)
 
         await manager.startServer()
         manager.stopServer()
 
         XCTAssertTrue(mockServer.stopCalled)
-        XCTAssertEqual(manager.state, .idle)
+        XCTAssertEqual(manager.state, AppState.idle)
     }
 }
 
@@ -37,6 +47,10 @@ private final class MockServerManager: ServerManaging {
 
     func stop() {
         stopCalled = true
+    }
+
+    func stopAndWait(timeout: TimeInterval) async {
+        stop()
     }
 
     func checkModelExists(_ modelIdentifier: String) async throws -> Bool {

@@ -28,6 +28,7 @@ class HotkeyManager {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var isHotkeyPressed = false
+    private(set) var isRunning = false
     
     // Hotkey configuration: Ctrl + X
     private var targetKeyCode: CGKeyCode = CGKeyCode(Constants.Hotkey.defaultKeyCode)
@@ -43,10 +44,17 @@ class HotkeyManager {
     
     /// Start listening for hotkey events
     /// Returns true if successful, false if permissions are missing
-    func start() -> Bool {
+    func start(promptIfMissing: Bool = false) -> Bool {
+        if isRunning {
+            Log.hotkey.debug("Event tap already running")
+            return true
+        }
+
         guard PermissionManager.checkAccessibilityPermission() else {
             Log.hotkey.error("Accessibility permission not granted")
-            PermissionManager.requestAccessibilityPermission()
+            if promptIfMissing {
+                _ = PermissionManager.requestAccessibilityPermission()
+            }
             return false
         }
         
@@ -80,6 +88,7 @@ class HotkeyManager {
         runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+        isRunning = true
         
         Log.hotkey.info("Event tap started - listening for Ctrl+X")
         return true
@@ -95,6 +104,8 @@ class HotkeyManager {
         }
         eventTap = nil
         runLoopSource = nil
+        isRunning = false
+        isHotkeyPressed = false
         Log.hotkey.info("Event tap stopped")
     }
     

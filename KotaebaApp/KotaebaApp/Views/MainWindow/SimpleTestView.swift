@@ -4,15 +4,25 @@ import SwiftUI
 struct SimpleTestView: View {
     @EnvironmentObject var stateManager: AppStateManager
     @State private var transcribedText: String = ""
-    @State private var setupStatus: String = ""
+
+    private var setupStatus: String {
+        """
+        Runtime: \(SetupManager.isSetupComplete ? "✅ Ready" : "❌ Missing")
+        Runtime Source: \(SetupManager.runtimeSourceDescription)
+        Accessibility: \(stateManager.permissionStatus.accessibility ? "✅" : "❌")
+        Microphone: \(stateManager.permissionStatus.microphone ? "✅" : "❌")
+        Hotkey: \(stateManager.isHotkeyActive ? "✅ Active" : "❌ Inactive")
+        Status: \(stateManager.hotkeyStatusMessage)
+        """
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            // Status & Debug Info
+            // Status & debug info
             VStack(alignment: .leading, spacing: 8) {
-                Text("Test & Debug")
+                Text("Debug Tools")
                     .font(.system(size: 15, weight: .bold))
-                    .foregroundColor(Constants.UI.textPrimary)
+                    .foregroundStyle(Constants.UI.textPrimary)
 
                 HStack {
                     Circle()
@@ -21,33 +31,34 @@ struct SimpleTestView: View {
 
                     Text("Status: \(stateManager.state.statusText)")
                         .font(.system(size: 13))
-                        .foregroundColor(Constants.UI.textSecondary)
+                        .foregroundStyle(Constants.UI.textSecondary)
                 }
 
                 Text(setupStatus)
                     .font(.system(size: 12))
-                    .foregroundColor(Constants.UI.textSecondary.opacity(0.8))
+                    .foregroundStyle(Constants.UI.textSecondary.opacity(0.8))
+                    .textSelection(.enabled)
 
                 if let error = stateManager.lastInsertionError {
                     Text("Last insertion error: \(error)")
                         .font(.system(size: 12))
-                        .foregroundColor(Constants.UI.recordingRed)
+                        .foregroundStyle(Constants.UI.recordingRed)
                 } else if let method = stateManager.lastInsertionMethod {
                     Text("Last insertion: \(method)")
                         .font(.system(size: 12))
-                        .foregroundColor(Constants.UI.textSecondary.opacity(0.8))
+                        .foregroundStyle(Constants.UI.textSecondary.opacity(0.8))
                 }
             }
             .padding(12)
             .background(Constants.UI.surfaceDark)
-            .cornerRadius(10)
+            .clipShape(.rect(cornerRadius: 10))
 
             // Test Text Field
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Text("Transcription Output")
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(Constants.UI.textSecondary)
+                        .foregroundStyle(Constants.UI.textSecondary)
 
                     Spacer()
 
@@ -56,97 +67,91 @@ struct SimpleTestView: View {
                             transcribedText = ""
                         }
                         .font(.system(size: 11))
-                        .foregroundColor(Constants.UI.accentOrange)
+                        .foregroundStyle(Constants.UI.accentOrange)
                         .buttonStyle(.plain)
                     }
                 }
 
-                TextEditor(text: $transcribedText)
-                    .font(.system(size: 14))
-                    .foregroundColor(Constants.UI.textPrimary)
-                    .frame(height: 100)
-                    .padding(8)
-                    .background(Constants.UI.backgroundDark)
-                    .cornerRadius(8)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(Constants.UI.accentOrange.opacity(0.3), lineWidth: 1)
-                    )
+                ZStack(alignment: .topLeading) {
+                    TextEditor(text: $transcribedText)
+                        .font(.system(size: 14))
+                        .foregroundStyle(Constants.UI.textPrimary)
+                        .frame(height: 100)
+                        .padding(8)
+                        .background(Constants.UI.backgroundDark)
+                        .clipShape(.rect(cornerRadius: 8))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(Constants.UI.accentOrange.opacity(0.3), lineWidth: 1)
+                        )
 
-                if transcribedText.isEmpty {
-                    Text("Hold Ctrl+X to record. Text will appear here.")
-                        .font(.system(size: 11))
-                        .foregroundColor(Constants.UI.textSecondary.opacity(0.6))
-                        .padding(.top, -90)
-                        .padding(.leading, 12)
-                        .allowsHitTesting(false)
+                    if transcribedText.isEmpty {
+                        Text("Live and completed transcripts will appear here.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Constants.UI.textSecondary.opacity(0.6))
+                            .padding(.top, 16)
+                            .padding(.leading, 14)
+                            .allowsHitTesting(false)
+                    }
                 }
             }
 
             // Quick Actions
             HStack(spacing: 12) {
                 Button("Force Init Hotkey") {
-                    AppStateManager.shared.initializeHotkey()
-                    checkStatus()
+                    stateManager.refreshPermissionsAndHotkey(promptIfMissing: false)
                 }
                 .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.white)
+                .foregroundStyle(.white)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background(Constants.UI.accentOrange)
-                .cornerRadius(6)
+                .clipShape(.rect(cornerRadius: 6))
                 .buttonStyle(.plain)
 
-                Button("Mark Setup Complete") {
-                    UserDefaults.standard.set(true, forKey: Constants.Setup.setupCompletedKey)
-                    AppStateManager.shared.initializeHotkey()
-                    checkStatus()
+                Button("Refresh Runtime") {
+                    Task {
+                        await stateManager.checkModelDownloadStatus()
+                    }
                 }
                 .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.white)
+                .foregroundStyle(.white)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background(Constants.UI.successGreen)
-                .cornerRadius(6)
+                .clipShape(.rect(cornerRadius: 6))
                 .buttonStyle(.plain)
                 
                 Button("Test Insertion") {
                     testTextInsertion()
                 }
                 .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.white)
+                .foregroundStyle(.white)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background(Constants.UI.textSecondary)
-                .cornerRadius(6)
+                .clipShape(.rect(cornerRadius: 6))
                 .buttonStyle(.plain)
+                .disabled(!stateManager.permissionStatus.accessibility)
 
                 Spacer()
             }
         }
         .padding(16)
         .background(Constants.UI.surfaceDark.opacity(0.5))
-        .cornerRadius(12)
-        .onChange(of: stateManager.currentTranscription) { oldValue, newValue in
+        .clipShape(.rect(cornerRadius: 12))
+        .onChange(of: stateManager.currentTranscription) { _, newValue in
             if !newValue.isEmpty {
-                transcribedText += newValue + " "
+                transcribedText = newValue
             }
         }
-        .onAppear {
-            checkStatus()
+        .onChange(of: stateManager.lastCompletedTranscription) { _, newValue in
+            guard let newValue, !newValue.isEmpty else { return }
+            transcribedText = newValue
         }
-    }
-
-    private func checkStatus() {
-        let setupComplete = SetupManager.isSetupComplete
-        let permissions = PermissionManager.getPermissionStatus()
-
-        setupStatus = """
-        Setup: \(setupComplete ? "✅" : "❌ NOT COMPLETE")
-        Accessibility: \(permissions.accessibility ? "✅" : "❌")
-        Microphone: \(permissions.microphone ? "✅" : "❌")
-        Hotkey: Ctrl+X
-        """
+        .onAppear {
+            stateManager.refreshPermissionsAndHotkey(promptIfMissing: false)
+        }
     }
     
     private func testTextInsertion() {

@@ -48,7 +48,7 @@ final class TranscriptionSession {
 }
 
 /// Aggregated statistics computed from sessions
-struct AggregatedStats {
+struct AggregatedStats: Equatable {
     /// Total words spoken across all sessions
     let totalWords: Int
     
@@ -97,5 +97,16 @@ struct AggregatedStats {
         totalWords: 0,
         totalDuration: 0,
         sessionCount: 0
+    )
+}
+
+/// Cached statistics exposed to the app and UI.
+struct StatisticsSnapshot: Equatable {
+    let total: AggregatedStats
+    let today: AggregatedStats
+
+    static let empty = StatisticsSnapshot(
+        total: .empty,
+        today: .empty
     )
 }

@@ -15,6 +15,11 @@ class AppStateManager: ObservableObject {
     // MARK: - Singleton
     
     static let shared = AppStateManager()
+    static let testingInstance = AppStateManager(
+        serverManager: ServerManager(),
+        statisticsManager: StatisticsManager(storeInMemory: true),
+        shouldAutoStartServer: false
+    )
     
     // MARK: - Published State
     
@@ -23,11 +28,17 @@ class AppStateManager: ObservableObject {
     @Published private(set) var audioAmplitude: Float = 0.0
     @Published private(set) var lastInsertionError: String?
     @Published private(set) var lastInsertionMethod: String?
+    @Published private(set) var lastCompletedTranscription: String?
+    @Published private(set) var permissionStatus: PermissionStatus = PermissionManager.getPermissionStatus(source: "initial")
+    @Published private(set) var isHotkeyActive = false
+    @Published private(set) var hotkeyStatusMessage = "Hotkey not initialized"
     @Published var recordingMode: RecordingMode = .hold
     @Published var selectedModel: Constants.Models.Model = Constants.Models.defaultModel
     @Published private(set) var modelDownloadStatus: ModelDownloadStatus = .unknown
     @Published private(set) var modelDownloadError: String?
     @Published private(set) var modelDownloadProgress: Double?
+    @Published private(set) var aggregatedStats: AggregatedStats = .empty
+    @Published private(set) var todayStats: AggregatedStats = .empty
     
     // MARK: - Components
     
@@ -36,7 +47,8 @@ class AppStateManager: ObservableObject {
     private var webSocketClient: WebSocketClient?
     private var hotkeyManager: HotkeyManager?
     private var textInserter: TextInserter?
-    private let statisticsManager: StatisticsManager
+    private let statisticsManager: any StatisticsManaging
+    private var permissionRefreshTask: Task<Void, Never>?
     
     // MARK: - Session Tracking
     
@@ -46,13 +58,16 @@ class AppStateManager: ObservableObject {
     // MARK: - Initialization
 
     private init() {
-        self.statisticsManager = .shared
+        self.statisticsManager = StatisticsManager.shared
         loadPreferences()
         setupComponents()
+        refreshStatistics()
 
         // Auto-start server on app launch for instant hotkey response
-        Task {
-            await autoStartServer()
+        if !Constants.isRunningTests {
+            Task {
+                await autoStartServer()
+            }
         }
     }
 
@@ -60,16 +75,17 @@ class AppStateManager: ObservableObject {
         serverManager: ServerManaging,
         audioCapture: AudioCaptureManager? = nil,
         textInserter: TextInserter? = nil,
-        statisticsManager: StatisticsManager? = nil,
+        statisticsManager: (any StatisticsManaging)? = nil,
         shouldAutoStartServer: Bool = false
     ) {
-        self.statisticsManager = statisticsManager ?? .shared
+        self.statisticsManager = statisticsManager ?? StatisticsManager.shared
         self.serverManager = serverManager
         self.audioCapture = audioCapture
         self.textInserter = textInserter
         loadPreferences()
+        refreshStatistics()
 
-        if shouldAutoStartServer {
+        if shouldAutoStartServer && !Constants.isRunningTests {
             Task {
                 await self.autoStartServer()
             }
@@ -104,16 +120,95 @@ class AppStateManager: ObservableObject {
     }
     
     // MARK: - Hotkey Initialization
-    
-    func initializeHotkey() {
-        hotkeyManager = HotkeyManager()
-        hotkeyManager?.delegate = self
+
+    func refreshPermissionStatus(source: String = "manual") {
+        let latestStatus = PermissionManager.getPermissionStatus(source: source)
+        guard latestStatus != permissionStatus else { return }
+        permissionStatus = latestStatus
+    }
+
+    @discardableResult
+    func initializeHotkey(promptIfMissing: Bool = false) -> Bool {
+        refreshPermissionStatus(source: "initializeHotkey")
+
+        if hotkeyManager == nil {
+            hotkeyManager = HotkeyManager()
+            hotkeyManager?.delegate = self
+        }
+
         hotkeyManager?.recordingMode = recordingMode
-        
-        if hotkeyManager?.start() == true {
+
+        if hotkeyManager?.start(promptIfMissing: promptIfMissing) == true {
+            isHotkeyActive = true
+            hotkeyStatusMessage = "Hotkey listener active"
             Log.hotkey.info("Hotkey manager started")
-        } else {
-            Log.hotkey.error("Failed to start hotkey manager - check Accessibility permissions")
+            return true
+        }
+
+        isHotkeyActive = false
+        hotkeyStatusMessage = permissionStatus.accessibility
+            ? "Hotkey listener failed to start"
+            : "Accessibility permission is required"
+        Log.hotkey.error("Failed to start hotkey manager - check Accessibility permissions")
+        return false
+    }
+
+    func requestAccessibilityPermission() {
+        _ = PermissionManager.requestAccessibilityPermission()
+        refreshPermissionStatus(source: "requestAccessibilityPermission")
+    }
+
+    func handleApplicationDidBecomeActive() {
+        let previousStatus = permissionStatus
+        refreshPermissionStatus(source: "didBecomeActive")
+
+        if permissionStatus.accessibility {
+            if !previousStatus.accessibility {
+                Log.permissions.info("Accessibility granted while app was inactive; retrying hotkey initialization")
+            }
+            _ = initializeHotkey(promptIfMissing: false)
+        } else if isHotkeyActive {
+            hotkeyManager?.stop()
+            isHotkeyActive = false
+            hotkeyStatusMessage = "Accessibility permission is required"
+        }
+    }
+
+    func refreshPermissionsAndHotkey(promptIfMissing: Bool = false) {
+        refreshPermissionStatus(source: "refreshPermissionsAndHotkey")
+
+        guard permissionStatus.accessibility else {
+            isHotkeyActive = false
+            hotkeyStatusMessage = "Accessibility permission is required"
+            if promptIfMissing {
+                requestAccessibilityPermission()
+            }
+            return
+        }
+
+        _ = initializeHotkey(promptIfMissing: false)
+    }
+
+    func recheckPermissionsAndHotkey(attempts: Int = 3, interval: TimeInterval = 0.35) {
+        permissionRefreshTask?.cancel()
+        permissionRefreshTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let retryCount = max(1, attempts)
+
+            for attempt in 1...retryCount {
+                self.refreshPermissionsAndHotkey(promptIfMissing: false)
+
+                guard !self.permissionStatus.accessibility else {
+                    return
+                }
+
+                guard attempt < retryCount else {
+                    return
+                }
+
+                let intervalNanoseconds = UInt64(interval * 1_000_000_000)
+                try? await Task.sleep(nanoseconds: intervalNanoseconds)
+            }
         }
     }
     
@@ -121,14 +216,15 @@ class AppStateManager: ObservableObject {
 
     /// Auto-start server on app launch if preferences allow
     private func autoStartServer() async {
-        // Default to true if not explicitly set (first launch)
+        guard !Constants.isRunningTests else { return }
+
         let hasPreference = UserDefaults.standard.object(forKey: Constants.UserDefaultsKeys.autoStartServer) != nil
         let autoStart = UserDefaults.standard.bool(forKey: Constants.UserDefaultsKeys.autoStartServer)
 
         await checkModelDownloadStatus()
         await ensureDefaultModelDownloadedIfNeeded()
 
-        if !hasPreference || autoStart {
+        if hasPreference && autoStart {
             Log.app.info("Auto-starting server on launch...")
             await startServer()
         }
@@ -174,6 +270,7 @@ class AppStateManager: ObservableObject {
         
         state = .connecting
         currentTranscription = ""
+        lastCompletedTranscription = nil
         sessionWordCount = 0
         sessionStartTime = Date()
         
@@ -196,11 +293,16 @@ class AppStateManager: ObservableObject {
         
         // Save session statistics
         if let startTime = sessionStartTime {
-            let duration = Date().timeIntervalSince(startTime)
-            statisticsManager.recordSession(
+            let completedAt = Date()
+            let duration = completedAt.timeIntervalSince(startTime)
+            let snapshot = statisticsManager.recordSession(
                 wordCount: sessionWordCount,
-                duration: duration
+                duration: duration,
+                text: nil,
+                language: "en",
+                now: completedAt
             )
+            applyStatistics(snapshot)
         }
         
         // Reset
@@ -220,6 +322,15 @@ class AppStateManager: ObservableObject {
             startRecording()
         }
     }
+
+    func refreshStatistics(currentDate: Date = Date()) {
+        applyStatistics(statisticsManager.refreshSnapshot(currentDate: currentDate))
+    }
+
+    private func applyStatistics(_ snapshot: StatisticsSnapshot) {
+        aggregatedStats = snapshot.total
+        todayStats = snapshot.today
+    }
     
     // MARK: - Transcription Handling
     
@@ -238,6 +349,8 @@ class AppStateManager: ObservableObject {
         // For incremental insertion mode: insert each transcription as it arrives
         // The server sends transcription after each speech pause (via VAD)
         if !isPartial {
+            lastCompletedTranscription = trimmedText
+
             // Count words
             let wordCount = trimmedText.split(separator: " ").count
             sessionWordCount += wordCount
@@ -259,6 +372,7 @@ class AppStateManager: ObservableObject {
     }
 
     func testInsertion(_ text: String) {
+        refreshPermissionStatus(source: "testInsertion")
         guard let inserter = textInserter else {
             Log.textInsertion.error("TextInserter is nil. Cannot insert text.")
             lastInsertionError = "Text inserter not initialized."
@@ -404,18 +518,22 @@ class AppStateManager: ObservableObject {
     // MARK: - Shutdown
     
     func shutdown() {
+        permissionRefreshTask?.cancel()
         stopRecording()
         stopServer()
         hotkeyManager?.stop()
+        isHotkeyActive = false
     }
 
     /// Best-effort cleanup before app termination to avoid leaving server processes running.
     func shutdownForTermination() async {
+        permissionRefreshTask?.cancel()
         stopRecording()
         webSocketClient?.disconnect()
         audioCapture?.stopRecording()
         await serverManager?.stopAndWait(timeout: 2.0)
         hotkeyManager?.stop()
+        isHotkeyActive = false
         state = .idle
     }
 }

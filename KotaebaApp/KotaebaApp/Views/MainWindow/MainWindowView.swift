@@ -3,10 +3,24 @@ import SwiftUI
 /// Main application window with sidebar navigation
 struct MainWindowView: View {
     @State private var selection: SidebarItem? = .home
+    @AppStorage(Constants.UserDefaultsKeys.showDiagnosticsUI) private var showDiagnosticsUI = Constants.FeatureFlags.defaultDiagnosticsUI
+
+    private var diagnosticsEnabled: Bool {
+        Constants.FeatureFlags.showDiagnosticsUI
+    }
+
+    private var visibleSidebarItems: [SidebarItem] {
+        var items: [SidebarItem] = [.home]
+        if diagnosticsEnabled {
+            items.append(.diagnostics)
+        }
+        items.append(.settings)
+        return items
+    }
 
     var body: some View {
         NavigationSplitView {
-            List(SidebarItem.allCases, selection: $selection) { item in
+            List(visibleSidebarItems, selection: $selection) { item in
                 Label(item.title, systemImage: item.systemImage)
                     .tag(item)
             }
@@ -16,14 +30,33 @@ struct MainWindowView: View {
             switch selection ?? .home {
             case .home:
                 HomeDashboardView()
-            case .testApp:
-                TestAppView()
+            case .diagnostics:
+                if diagnosticsEnabled {
+                    DiagnosticsView()
+                } else {
+                    HomeDashboardView()
+                }
             case .settings:
                 SettingsDetailView()
             }
         }
         .frame(width: Constants.UI.mainWindowWidth, height: Constants.UI.mainWindowHeight)
         .preferredColorScheme(.dark)
+        .onAppear {
+            ensureValidSelection()
+        }
+        .onChange(of: showDiagnosticsUI) { _, _ in
+            ensureValidSelection()
+        }
+    }
+
+    private func ensureValidSelection() {
+        if !diagnosticsEnabled, selection == .diagnostics {
+            selection = .home
+        }
+        if selection == nil {
+            selection = .home
+        }
     }
 }
 
@@ -31,8 +64,17 @@ struct MainWindowView: View {
 
 enum SidebarItem: String, CaseIterable, Identifiable {
     case home = "Home"
-    case testApp = "Test App"
+    case diagnostics = "Test App"
     case settings = "Settings"
+
+    static var visibleCases: [SidebarItem] {
+        var items: [SidebarItem] = [.home]
+        if Constants.FeatureFlags.showDiagnosticsUI {
+            items.append(.diagnostics)
+        }
+        items.append(.settings)
+        return items
+    }
 
     var id: String { rawValue }
 
@@ -43,7 +85,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .home: return "house.fill"
-        case .testApp: return "hammer.fill"
+        case .diagnostics: return "hammer.fill"
         case .settings: return "gearshape.fill"
         }
     }
@@ -80,7 +122,7 @@ struct AppBackground<Content: View>: View {
 struct HomeDashboardView: View {
     var body: some View {
         AppBackground {
-            ScrollView(.vertical, showsIndicators: false) {
+            ScrollView(.vertical) {
                 VStack(spacing: 20) {
                     HeaderView()
                         .padding(.top, 16)
@@ -96,20 +138,21 @@ struct HomeDashboardView: View {
                 .padding(.horizontal, 20)
                 .padding(.bottom, 16)
             }
+            .scrollIndicators(.hidden)
         }
     }
 }
 
 // MARK: - Test App
 
-struct TestAppView: View {
+struct DiagnosticsView: View {
     var body: some View {
         AppBackground {
-            ScrollView(.vertical, showsIndicators: false) {
+            ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("Test App")
                         .font(.system(size: 20, weight: .bold))
-                        .foregroundColor(Constants.UI.textPrimary)
+                        .foregroundStyle(Constants.UI.textPrimary)
                         .padding(.top, 16)
 
                     PermissionStatusView()
@@ -121,6 +164,7 @@ struct TestAppView: View {
                 .padding(.horizontal, 20)
                 .padding(.bottom, 16)
             }
+            .scrollIndicators(.hidden)
         }
     }
 }
@@ -158,17 +202,17 @@ struct HeaderView: View {
 
                 Image(systemName: "waveform")
                     .font(.system(size: 20, weight: .semibold))
-                    .foregroundColor(.white)
+                    .foregroundStyle(.white)
             }
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("Kotaeba")
                     .font(.system(size: 24, weight: .bold))
-                    .foregroundColor(Constants.UI.textPrimary)
+                    .foregroundStyle(Constants.UI.textPrimary)
 
                 Text("Voice-to-Text Assistant")
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(Constants.UI.textSecondary)
+                    .foregroundStyle(Constants.UI.textSecondary)
             }
 
             Spacer()
@@ -183,7 +227,7 @@ struct FooterView: View {
         HStack {
             Text("v\(Constants.appVersion)")
                 .font(.caption2)
-                .foregroundColor(Constants.UI.textSecondary.opacity(0.6))
+                .foregroundStyle(Constants.UI.textSecondary.opacity(0.6))
 
             Spacer()
         }

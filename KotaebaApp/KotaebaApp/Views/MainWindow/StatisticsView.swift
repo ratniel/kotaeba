@@ -2,14 +2,14 @@ import SwiftUI
 
 /// Compact statistics display view
 struct StatisticsView: View {
-    @State private var stats: AggregatedStats = .empty
+    @EnvironmentObject private var stateManager: AppStateManager
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Statistics")
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(Constants.UI.textSecondary)
+                    .foregroundStyle(Constants.UI.textSecondary)
                     .textCase(.uppercase)
                     .tracking(0.5)
 
@@ -18,7 +18,7 @@ struct StatisticsView: View {
                 Button(action: refreshStats) {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 11))
-                        .foregroundColor(Constants.UI.textSecondary.opacity(0.6))
+                        .foregroundStyle(Constants.UI.textSecondary.opacity(0.6))
                 }
                 .buttonStyle(.plain)
             }
@@ -30,31 +30,31 @@ struct StatisticsView: View {
             ], spacing: 10) {
                 CompactStatCard(
                     icon: "text.bubble.fill",
-                    value: formatNumber(stats.totalWords),
+                    value: formatNumber(stateManager.aggregatedStats.totalWords),
                     label: "Words"
                 )
 
                 CompactStatCard(
                     icon: "clock.fill",
-                    value: stats.formattedDurationShort,
+                    value: stateManager.aggregatedStats.formattedDurationShort,
                     label: "Time"
                 )
 
                 CompactStatCard(
                     icon: "bolt.fill",
-                    value: stats.formattedTimeSavedShort,
+                    value: stateManager.aggregatedStats.formattedTimeSavedShort,
                     label: "Saved",
                     accentColor: Constants.UI.successGreen
                 )
 
                 CompactStatCard(
                     icon: "chart.bar.fill",
-                    value: "\(stats.sessionCount)",
+                    value: "\(stateManager.aggregatedStats.sessionCount)",
                     label: "Sessions"
                 )
             }
         }
-        .onAppear {
+        .task {
             refreshStats()
         }
     }
@@ -62,14 +62,18 @@ struct StatisticsView: View {
     // MARK: - Helpers
 
     private func refreshStats() {
-        stats = StatisticsManager.shared.getAggregatedStats()
+        stateManager.refreshStatistics()
     }
 
     private func formatNumber(_ number: Int) -> String {
+        Self.numberFormatter.string(from: NSNumber(value: number)) ?? "\(number)"
+    }
+
+    private static let numberFormatter: NumberFormatter = {
         let formatter = NumberFormatter()
         formatter.numberStyle = .decimal
-        return formatter.string(from: NSNumber(value: number)) ?? "\(number)"
-    }
+        return formatter
+    }()
 }
 
 // MARK: - Compact Stat Card
@@ -85,7 +89,7 @@ struct CompactStatCard: View {
             HStack {
                 Image(systemName: icon)
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(accentColor.opacity(0.8))
+                    .foregroundStyle(accentColor.opacity(0.8))
 
                 Spacer()
             }
@@ -93,18 +97,15 @@ struct CompactStatCard: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(value)
                     .font(.system(size: 18, weight: .bold, design: .rounded))
-                    .foregroundColor(Constants.UI.textPrimary)
+                    .foregroundStyle(Constants.UI.textPrimary)
 
                 Text(label)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(Constants.UI.textSecondary.opacity(0.7))
+                    .foregroundStyle(Constants.UI.textSecondary.opacity(0.7))
             }
         }
         .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Constants.UI.surfaceDark)
-        )
+        .background(Constants.UI.surfaceDark, in: .rect(cornerRadius: 10))
     }
 }
 
@@ -142,4 +143,5 @@ extension AggregatedStats {
     StatisticsView()
         .padding()
         .background(Constants.UI.backgroundDark)
+        .environmentObject(AppStateManager.shared)
 }
