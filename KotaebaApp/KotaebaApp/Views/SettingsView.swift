@@ -89,7 +89,7 @@ struct GeneralSettingsView: View {
             }
 
             Section {
-                TextField("Hugging Face API key (optional)", text: $tokenDraft)
+                SecureField("Hugging Face API key (optional)", text: $tokenDraft)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(.body, design: .monospaced))
 

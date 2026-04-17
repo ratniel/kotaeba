@@ -60,14 +60,18 @@ final class FileLogger {
     private let dateFormatter = ISO8601DateFormatter()
     private let maxFileSize: UInt64 = 5 * 1024 * 1024
     private let fileURL: URL
+    private let isEnabled: Bool
 
     private init() {
+        self.isEnabled = !Constants.isRunningTests
         let logsDir = Constants.supportDirectory.appendingPathComponent("logs")
         try? FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
         self.fileURL = logsDir.appendingPathComponent("kotaeba.log")
     }
 
     func log(_ level: LogLevel, category: String, message: String) {
+        guard isEnabled else { return }
+
         let timestamp = dateFormatter.string(from: Date())
         let line = "\(timestamp) [\(level.rawValue)] [\(category)] \(message)\n"
 

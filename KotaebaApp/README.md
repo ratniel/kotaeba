@@ -218,8 +218,8 @@ See `../INSTANT_TRANSCRIPTION.md` for architecture details.
 - **Hotkey**: Ctrl+X
 - **Recording Mode**: Toggle
 - **Model**: Parakeet-TDT-0.6B (default, pre-downloaded)
-- **Auto-Start Server**: Enabled (for instant response)
-- **Server**: localhost:8000
+- **Auto-Start Server**: Configurable in Settings
+- **Server**: localhost:9999
 - **Audio**: 16kHz, mono, Int16 PCM
 
 ### Configurable Settings
@@ -283,7 +283,7 @@ See `../INSTANT_TRANSCRIPTION.md` for architecture details.
 - Buffer size: 1600 samples (100ms)
 
 ### WebSocket Protocol
-- Endpoint: `ws://localhost:8765/v1/audio/transcriptions/realtime`
+- Endpoint: `ws://localhost:9999/v1/audio/transcriptions/realtime`
 - First message: JSON config
 - Subsequent messages: Binary audio data
 - Receives: JSON transcriptions

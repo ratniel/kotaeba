@@ -9,8 +9,12 @@ enum Constants {
     static let appName = "Kotaeba"
     static let appVersion = "1.0.0"
     static let supportDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!.appendingPathComponent("Kotaeba")
-    static var isRunningTests: Bool {
-        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    static var isRunningTests: Bool { Runtime.isRunningTests }
+
+    enum Runtime {
+        static let isRunningTests =
+            ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil ||
+            NSClassFromString("XCTestCase") != nil
     }
 
     enum FeatureFlags {
