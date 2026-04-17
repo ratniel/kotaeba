@@ -11,7 +11,7 @@ struct TranscriptionTestView: View {
             HStack {
                 Text("Live Transcription")
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(Constants.UI.textSecondary)
+                    .foregroundStyle(Constants.UI.textSecondary)
                     .textCase(.uppercase)
                     .tracking(0.5)
 
@@ -24,7 +24,7 @@ struct TranscriptionTestView: View {
                         Text("Clear")
                             .font(.system(size: 11))
                     }
-                    .foregroundColor(Constants.UI.textSecondary.opacity(0.6))
+                    .foregroundStyle(Constants.UI.textSecondary.opacity(0.6))
                 }
                 .buttonStyle(.plain)
             }
@@ -41,7 +41,7 @@ struct TranscriptionTestView: View {
                     }
 
                     // History (final transcriptions)
-                    ForEach(transcriptionHistory.reversed()) { entry in
+                    ForEach(transcriptionHistory) { entry in
                         TranscriptionBubble(
                             text: entry.text,
                             isPartial: false,
@@ -61,11 +61,9 @@ struct TranscriptionTestView: View {
                     .fill(Constants.UI.backgroundDark.opacity(0.5))
             )
         }
-        .onChange(of: stateManager.currentTranscription) { oldValue, newValue in
-            // When transcription changes and is final (goes from value to empty), save it
-            if !oldValue.isEmpty && newValue.isEmpty && stateManager.state == .recording {
-                addTranscription(oldValue)
-            }
+        .onChange(of: stateManager.lastCompletedTranscription) { _, newValue in
+            guard let newValue, !newValue.isEmpty else { return }
+            addTranscription(newValue)
         }
     }
 
@@ -101,11 +99,11 @@ struct TranscriptionBubble: View {
                 if let timestamp = timestamp {
                     Text(formatTime(timestamp))
                         .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(Constants.UI.textSecondary.opacity(0.6))
+                        .foregroundStyle(Constants.UI.textSecondary.opacity(0.6))
                 } else if isPartial {
                     Text("LIVE")
                         .font(.system(size: 10, weight: .bold))
-                        .foregroundColor(Constants.UI.accentOrange.opacity(0.8))
+                        .foregroundStyle(Constants.UI.accentOrange.opacity(0.8))
                 }
 
                 Spacer()
@@ -119,7 +117,7 @@ struct TranscriptionBubble: View {
 
             Text(text)
                 .font(.system(size: 13, weight: isPartial ? .medium : .regular))
-                .foregroundColor(Constants.UI.textPrimary.opacity(isPartial ? 0.9 : 1.0))
+                .foregroundStyle(Constants.UI.textPrimary.opacity(isPartial ? 0.9 : 1.0))
                 .textSelection(.enabled)
         }
         .padding(.horizontal, 12)
@@ -138,10 +136,14 @@ struct TranscriptionBubble: View {
     }
 
     private func formatTime(_ date: Date) -> String {
+        Self.timeFormatter.string(from: date)
+    }
+
+    private static let timeFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss"
-        return formatter.string(from: date)
-    }
+        return formatter
+    }()
 }
 
 // MARK: - Empty State
@@ -151,15 +153,15 @@ struct EmptyStateView: View {
         VStack(spacing: 8) {
             Image(systemName: "waveform.badge.mic")
                 .font(.system(size: 32))
-                .foregroundColor(Constants.UI.textSecondary.opacity(0.3))
+                .foregroundStyle(Constants.UI.textSecondary.opacity(0.3))
 
             Text("Hold Ctrl+X to start recording")
                 .font(.system(size: 12, weight: .medium))
-                .foregroundColor(Constants.UI.textSecondary.opacity(0.6))
+                .foregroundStyle(Constants.UI.textSecondary.opacity(0.6))
 
             Text("Transcriptions will appear here")
                 .font(.system(size: 11))
-                .foregroundColor(Constants.UI.textSecondary.opacity(0.4))
+                .foregroundStyle(Constants.UI.textSecondary.opacity(0.4))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding()

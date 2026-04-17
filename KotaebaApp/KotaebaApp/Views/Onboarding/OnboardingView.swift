@@ -1,74 +1,39 @@
 import SwiftUI
 
-/// First-run onboarding flow
-///
-/// Guides user through:
-/// 1. Welcome
-/// 2. Permission requests (system dialogs)
-/// 3. Dependency installation
-/// 4. Completion
+/// First-run onboarding flow focused on permissions and model preparation.
 struct OnboardingView: View {
     @StateObject private var setupManager = SetupManager()
     @State private var currentStep: OnboardingStep = .welcome
     @State private var permissionStatus = PermissionManager.getPermissionStatus()
     @State private var isRequestingPermissions = false
-    
+    @State private var permissionHint: String?
+
     enum OnboardingStep {
         case welcome
         case setup
         case complete
     }
-    
+
     var body: some View {
         ZStack {
             Constants.UI.backgroundDark
                 .ignoresSafeArea()
-            
+
             VStack(spacing: 32) {
                 switch currentStep {
                 case .welcome:
                     WelcomeStepView(
+                        permissionStatus: permissionStatus,
                         isRequestingPermissions: isRequestingPermissions,
-                        onNext: {
-                            if permissionStatus.allGranted {
-                                currentStep = .setup
-                                return
-                            }
-                            
-                            isRequestingPermissions = true
-                            Task { @MainActor in
-                                Log.ui.info("Starting permission requests")
-                                Log.ui.info("Current status - Accessibility: \(permissionStatus.accessibility), Microphone: \(permissionStatus.microphone)")
-                                
-                                Log.ui.info("Requesting Accessibility permission...")
-                                PermissionManager.requestAccessibilityPermission()
-                                
-                                Log.ui.info("Requesting Microphone permission...")
-                                let micResult = await PermissionManager.requestMicrophonePermissionOrOpenSettings()
-                                Log.ui.info("Microphone request returned: \(micResult)")
-                                
-                                permissionStatus = PermissionManager.getPermissionStatus()
-                                Log.ui.info("After requests - Accessibility: \(permissionStatus.accessibility), Microphone: \(permissionStatus.microphone)")
-                                
-                                while !permissionStatus.allGranted {
-                                    try? await Task.sleep(nanoseconds: 1_000_000_000)
-                                    permissionStatus = PermissionManager.getPermissionStatus()
-                                    Log.ui.debug("Polling - Accessibility: \(permissionStatus.accessibility), Microphone: \(permissionStatus.microphone)")
-                                }
-                                
-                                Log.ui.info("All permissions granted! Advancing to setup...")
-                                isRequestingPermissions = false
-                                currentStep = .setup
-                            }
-                        }
+                        permissionHint: permissionHint,
+                        onNext: handleWelcomeAction,
+                        onRecheck: refreshPermissionStatus
                     )
-                    
                 case .setup:
                     SetupStepView(
                         setupManager: setupManager,
                         onComplete: { currentStep = .complete }
                     )
-                    
                 case .complete:
                     CompleteStepView()
                 }
@@ -77,73 +42,169 @@ struct OnboardingView: View {
         }
         .preferredColorScheme(.dark)
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            permissionStatus = PermissionManager.getPermissionStatus()
+            refreshPermissionStatus()
+            guard currentStep == .welcome, permissionStatus.allGranted else { return }
+            isRequestingPermissions = false
+            permissionHint = nil
         }
+    }
+
+    private func handleWelcomeAction() {
+        if permissionStatus.allGranted {
+            currentStep = .setup
+            return
+        }
+
+        isRequestingPermissions = true
+        permissionHint = "Grant Accessibility and microphone access, then return to Kotaeba."
+
+        Task { @MainActor in
+            PermissionManager.requestAccessibilityPermission()
+            _ = await PermissionManager.requestMicrophonePermissionOrOpenSettings()
+            refreshPermissionStatus()
+
+            if permissionStatus.allGranted {
+                isRequestingPermissions = false
+                permissionHint = nil
+                currentStep = .setup
+            } else {
+                isRequestingPermissions = false
+            }
+        }
+    }
+
+    private func refreshPermissionStatus() {
+        permissionStatus = PermissionManager.getPermissionStatus()
     }
 }
 
 // MARK: - Welcome Step
 
 struct WelcomeStepView: View {
+    let permissionStatus: PermissionStatus
     let isRequestingPermissions: Bool
+    let permissionHint: String?
     let onNext: () -> Void
-    
+    let onRecheck: () -> Void
+
     var body: some View {
         VStack(spacing: 32) {
             Spacer()
-            
+
             Image(systemName: "mic.circle.fill")
                 .font(.system(size: 80))
-                .foregroundColor(Constants.UI.accentOrange)
-            
+                .foregroundStyle(Constants.UI.accentOrange)
+
             VStack(spacing: 12) {
                 Text("Welcome to Kotaeba")
                     .font(.system(size: 32, weight: .bold))
-                    .foregroundColor(Constants.UI.textPrimary)
-                
-                Text("Speech-to-text transcription at your fingertips")
+                    .foregroundStyle(Constants.UI.textPrimary)
+
+                Text("Grant permissions once, then download the default speech model.")
                     .font(.system(size: 16))
-                    .foregroundColor(Constants.UI.textSecondary)
+                    .foregroundStyle(Constants.UI.textSecondary)
+                    .multilineTextAlignment(.center)
             }
-            
+
             Spacer()
-            
+
             VStack(alignment: .leading, spacing: 16) {
                 FeatureRowView(icon: "bolt.fill", text: "Hold Ctrl+X to dictate anywhere")
-                FeatureRowView(icon: "brain.head.profile", text: "Powered by Apple MLX Whisper")
-                FeatureRowView(icon: "lock.fill", text: "100% offline and private")
+                FeatureRowView(icon: "brain.head.profile", text: "Uses a local speech runtime on your Mac")
+                FeatureRowView(icon: "lock.fill", text: "Downloads models once, then stays private and offline")
             }
-            
+
+            PermissionSummaryCard(permissionStatus: permissionStatus, permissionHint: permissionHint, onRecheck: onRecheck)
+
             Spacer()
-            
+
             Button(action: onNext) {
-                Text(isRequestingPermissions ? "Requesting Permissions..." : "Get Started")
+                Text(buttonTitle)
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(.white)
+                    .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
                     .background(Constants.UI.accentOrange)
-                    .cornerRadius(10)
+                    .clipShape(.rect(cornerRadius: 10))
             }
             .buttonStyle(.plain)
             .disabled(isRequestingPermissions)
         }
+    }
+
+    private var buttonTitle: String {
+        if permissionStatus.allGranted {
+            return "Continue"
+        }
+        return isRequestingPermissions ? "Checking Permissions..." : "Grant Permissions"
     }
 }
 
 struct FeatureRowView: View {
     let icon: String
     let text: String
-    
+
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: icon)
                 .font(.system(size: 18))
-                .foregroundColor(Constants.UI.accentOrange)
+                .foregroundStyle(Constants.UI.accentOrange)
                 .frame(width: 24)
-            
+
             Text(text)
-                .foregroundColor(Constants.UI.textPrimary)
+                .foregroundStyle(Constants.UI.textPrimary)
+        }
+    }
+}
+
+struct PermissionSummaryCard: View {
+    let permissionStatus: PermissionStatus
+    let permissionHint: String?
+    let onRecheck: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            PermissionStatusRow(title: "Accessibility", isGranted: permissionStatus.accessibility)
+            PermissionStatusRow(title: "Microphone", isGranted: permissionStatus.microphone)
+
+            if let permissionHint, !permissionStatus.allGranted {
+                Text(permissionHint)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Constants.UI.textSecondary)
+            }
+
+            if !permissionStatus.allGranted {
+                Button("Recheck") {
+                    onRecheck()
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Constants.UI.accentOrange)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Constants.UI.surfaceDark)
+        .clipShape(.rect(cornerRadius: 12))
+    }
+}
+
+struct PermissionStatusRow: View {
+    let title: String
+    let isGranted: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: isGranted ? "checkmark.circle.fill" : "xmark.circle.fill")
+                .foregroundStyle(isGranted ? Constants.UI.successGreen : Constants.UI.recordingRed)
+
+            Text(title)
+                .foregroundStyle(Constants.UI.textPrimary)
+
+            Spacer()
+
+            Text(isGranted ? "Granted" : "Required")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Constants.UI.textSecondary)
         }
     }
 }
@@ -153,24 +214,23 @@ struct FeatureRowView: View {
 struct SetupStepView: View {
     @ObservedObject var setupManager: SetupManager
     let onComplete: () -> Void
-    
-    var body: some View {
-        let installPath = Constants.Setup.venvPath.path
 
+    var body: some View {
         VStack(spacing: 28) {
             Spacer()
 
             VStack(spacing: 10) {
                 Text("Kotaeba")
                     .font(.system(size: 42, weight: .bold, design: .rounded))
-                    .foregroundColor(Constants.UI.accentOrange)
+                    .foregroundStyle(Constants.UI.accentOrange)
 
-                Text("Installing Kotaeba")
+                Text("Prepare Your Model")
                     .font(.system(size: 24, weight: .bold))
-                    .foregroundColor(Constants.UI.textPrimary)
+                    .foregroundStyle(Constants.UI.textPrimary)
 
-                Text("Setting up Python environment and ML models")
-                    .foregroundColor(Constants.UI.textSecondary)
+                Text("We'll verify the speech runtime and download the default model for instant dictation.")
+                    .foregroundStyle(Constants.UI.textSecondary)
+                    .multilineTextAlignment(.center)
             }
 
             VStack(spacing: 16) {
@@ -181,19 +241,19 @@ struct SetupStepView: View {
 
                     Text(setupManager.currentStep)
                         .font(.system(size: 14))
-                        .foregroundColor(Constants.UI.textSecondary)
+                        .foregroundStyle(Constants.UI.textSecondary)
                 } else if let error = setupManager.error {
                     VStack(spacing: 12) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.system(size: 32))
-                            .foregroundColor(Constants.UI.recordingRed)
+                            .foregroundStyle(Constants.UI.recordingRed)
 
-                        Text("Setup Failed")
+                        Text("Preparation Failed")
                             .font(.headline)
 
                         Text(error)
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
                     }
                     .padding(.horizontal, 12)
@@ -201,31 +261,36 @@ struct SetupStepView: View {
                     VStack(spacing: 12) {
                         Image(systemName: "checkmark.circle.fill")
                             .font(.system(size: 48))
-                            .foregroundColor(Constants.UI.successGreen)
+                            .foregroundStyle(Constants.UI.successGreen)
 
-                        Text("Setup Complete!")
+                        Text("Model Ready!")
                             .font(.headline)
                     }
                 } else {
-                    Text("Ready to install dependencies")
+                    Text("Ready to prepare the default speech model.")
                         .font(.system(size: 14))
-                        .foregroundColor(Constants.UI.textSecondary)
+                        .foregroundStyle(Constants.UI.textSecondary)
                 }
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Install Location")
+                Text("Runtime")
                     .font(.caption)
-                    .foregroundColor(Constants.UI.textSecondary)
+                    .foregroundStyle(Constants.UI.textSecondary)
 
-                Text(installPath)
+                Text(Constants.Setup.runtimeSourceDisplayName)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Constants.UI.textPrimary)
+
+                Text(Constants.Setup.runtimeDisplayPath)
                     .font(.system(.caption, design: .monospaced))
-                    .foregroundColor(Constants.UI.textPrimary)
+                    .foregroundStyle(Constants.UI.textSecondary)
+                    .textSelection(.enabled)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Constants.UI.surfaceDark)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .clipShape(.rect(cornerRadius: 8))
             }
 
             Spacer()
@@ -234,26 +299,22 @@ struct SetupStepView: View {
                 Button(action: onComplete) {
                     Text("Finish")
                         .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(.white)
+                        .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
                         .background(Constants.UI.accentOrange)
-                        .cornerRadius(10)
+                        .clipShape(.rect(cornerRadius: 10))
                 }
                 .buttonStyle(.plain)
             } else {
-                Button(action: {
-                    Task {
-                        await setupManager.runSetup()
-                    }
-                }) {
-                    Text(setupManager.isSettingUp ? "Installing..." : "Install Kotaeba")
+                Button(action: prepareModel) {
+                    Text(setupManager.isSettingUp ? "Preparing..." : "Download Default Model")
                         .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(.white)
+                        .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
                         .background(Constants.UI.accentOrange)
-                        .cornerRadius(10)
+                        .clipShape(.rect(cornerRadius: 10))
                 }
                 .buttonStyle(.plain)
                 .disabled(setupManager.isSettingUp)
@@ -261,13 +322,17 @@ struct SetupStepView: View {
 
             if setupManager.error != nil {
                 Button("Retry") {
-                    Task {
-                        await setupManager.runSetup()
-                    }
+                    prepareModel()
                 }
                 .buttonStyle(.plain)
-                .foregroundColor(Constants.UI.accentOrange)
+                .foregroundStyle(Constants.UI.accentOrange)
             }
+        }
+    }
+
+    private func prepareModel() {
+        Task {
+            await setupManager.runSetup()
         }
     }
 }
@@ -278,51 +343,42 @@ struct CompleteStepView: View {
     var body: some View {
         VStack(spacing: 32) {
             Spacer()
-            
+
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 80))
-                .foregroundColor(Constants.UI.successGreen)
-            
+                .foregroundStyle(Constants.UI.successGreen)
+
             VStack(spacing: 12) {
                 Text("All Set!")
                     .font(.system(size: 32, weight: .bold))
-                    .foregroundColor(Constants.UI.textPrimary)
-                
+                    .foregroundStyle(Constants.UI.textPrimary)
+
                 Text("You're ready to start dictating")
                     .font(.system(size: 16))
-                    .foregroundColor(Constants.UI.textSecondary)
+                    .foregroundStyle(Constants.UI.textSecondary)
             }
-            
+
             Spacer()
-            
+
             VStack(alignment: .leading, spacing: 16) {
-                InstructionRowView(
-                    number: 1,
-                    text: "Start the server from the menubar or main window"
-                )
-                InstructionRowView(
-                    number: 2,
-                    text: "Hold Ctrl+X to begin recording"
-                )
-                InstructionRowView(
-                    number: 3,
-                    text: "Speak naturally - your words will appear at the cursor"
-                )
+                InstructionRowView(number: 1, text: "Start the server from the menu bar or main window")
+                InstructionRowView(number: 2, text: "Hold Ctrl+X to begin recording")
+                InstructionRowView(number: 3, text: "Speak naturally and insert text at the cursor")
             }
-            
+
             Spacer()
-            
+
             Button(action: {
                 NSApplication.shared.keyWindow?.close()
                 AppStateManager.shared.initializeHotkey()
             }) {
                 Text("Start Using Kotaeba")
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(.white)
+                    .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
                     .background(Constants.UI.accentOrange)
-                    .cornerRadius(10)
+                    .clipShape(.rect(cornerRadius: 10))
             }
             .buttonStyle(.plain)
         }
@@ -332,18 +388,18 @@ struct CompleteStepView: View {
 struct InstructionRowView: View {
     let number: Int
     let text: String
-    
+
     var body: some View {
         HStack(spacing: 12) {
             Text("\(number)")
                 .font(.system(size: 16, weight: .bold))
-                .foregroundColor(.white)
+                .foregroundStyle(.white)
                 .frame(width: 32, height: 32)
                 .background(Constants.UI.accentOrange)
                 .clipShape(Circle())
-            
+
             Text(text)
-                .foregroundColor(Constants.UI.textPrimary)
+                .foregroundStyle(Constants.UI.textPrimary)
         }
     }
 }

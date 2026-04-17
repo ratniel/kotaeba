@@ -3,18 +3,21 @@ import XCTest
 
 @MainActor
 final class StatisticsManagerTests: XCTestCase {
+    private var manager: StatisticsManager!
+
     override func setUp() {
         super.setUp()
-        StatisticsManager.shared.clearAllData()
+        manager = StatisticsManager.shared
+        _ = manager.clearAllData()
     }
 
     override func tearDown() {
-        StatisticsManager.shared.clearAllData()
+        _ = manager.clearAllData()
+        manager = nil
         super.tearDown()
     }
 
     func testTodayCacheUpdatesOnRecordSession() {
-        let manager = StatisticsManager.shared
         let now = Date()
 
         _ = manager.getTodayStats(currentDate: now)
@@ -25,8 +28,17 @@ final class StatisticsManagerTests: XCTestCase {
         XCTAssertEqual(updated.sessionCount, 1)
     }
 
+    func testAggregatedStatsAccumulateAcrossSessions() {
+        let now = Date()
+
+        manager.recordSession(wordCount: 3, duration: 5, now: now)
+        manager.recordSession(wordCount: 7, duration: 15, now: now.addingTimeInterval(60))
+
+        let stats = manager.getAggregatedStats()
+        XCTAssertEqual(stats, AggregatedStats(totalWords: 10, totalDuration: 20, sessionCount: 2))
+    }
+
     func testTodayCacheResetsOnDateChange() {
-        let manager = StatisticsManager.shared
         let now = Date()
 
         manager.recordSession(wordCount: 3, duration: 5, now: now)
@@ -37,5 +49,17 @@ final class StatisticsManagerTests: XCTestCase {
 
         XCTAssertEqual(tomorrowStats.totalWords, 0)
         XCTAssertEqual(tomorrowStats.sessionCount, 0)
+    }
+
+    func testClearAllDataRemovesCachedStats() {
+        let now = Date()
+
+        manager.recordSession(wordCount: 4, duration: 6, now: now)
+        XCTAssertEqual(manager.getAggregatedStats().sessionCount, 1)
+
+        manager.clearAllData()
+
+        XCTAssertEqual(manager.getAggregatedStats(), .empty)
+        XCTAssertEqual(manager.getTodayStats(currentDate: now), .empty)
     }
 }

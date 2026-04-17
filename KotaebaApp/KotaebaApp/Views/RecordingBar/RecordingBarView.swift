@@ -58,7 +58,7 @@ struct RecordingIndicatorView: View {
             
             Text("REC")
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
-                .foregroundColor(Constants.UI.recordingRed)
+                .foregroundStyle(Constants.UI.recordingRed)
         }
     }
 }
@@ -69,12 +69,13 @@ struct TranscriptionTextView: View {
     let text: String
     
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        ScrollView(.horizontal) {
             Text(text.isEmpty ? "Listening..." : text)
                 .font(.system(size: 14))
-                .foregroundColor(text.isEmpty ? Constants.UI.textSecondary : Constants.UI.textPrimary)
+                .foregroundStyle(text.isEmpty ? Constants.UI.textSecondary : Constants.UI.textPrimary)
                 .lineLimit(1)
         }
+        .scrollIndicators(.hidden)
     }
 }
 

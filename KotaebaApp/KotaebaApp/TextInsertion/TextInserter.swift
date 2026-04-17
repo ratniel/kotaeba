@@ -58,15 +58,17 @@ class TextInserter {
     
     /// Insert text at the current cursor position
     @discardableResult
-    func insertText(_ text: String) -> TextInsertionResult {
+    func insertText(_ text: String, promptIfMissing: Bool = false) -> TextInsertionResult {
         guard !text.isEmpty else {
             Log.textInsertion.warning("Attempted to insert empty text")
             return .failure(.emptyText)
         }
         
-        guard AXIsProcessTrusted() else {
+        guard PermissionManager.checkAccessibilityPermission() else {
             Log.textInsertion.error("Accessibility permission required")
-            PermissionManager.requestAccessibilityPermission()
+            if promptIfMissing {
+                _ = PermissionManager.requestAccessibilityPermission()
+            }
             return .failure(.accessibilityPermissionDenied)
         }
         

@@ -20,14 +20,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - App Lifecycle
     
     func applicationDidFinishLaunching(_ notification: Notification) {
-        guard !Constants.Runtime.isRunningTests else {
-            return
-        }
-
+        guard !Constants.isRunningTests else { return }
         setupMenubar()
         setupRecordingBar()
         observeStateChanges()
         observeWindowVisibility()
+        observeApplicationActivation()
         checkFirstRun()
         Log.app.info("App logs at \(Constants.supportDirectory.appendingPathComponent("logs/kotaeba.log").path)")
         
@@ -165,6 +163,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
     }
+
+    private func observeApplicationActivation() {
+        NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { _ in
+                AppStateManager.shared.handleApplicationDidBecomeActive()
+            }
+            .store(in: &cancellables)
+    }
     
     private func updateMenubarIcon(for state: AppState) {
         guard let button = statusItem.button else { return }
@@ -198,6 +205,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - First Run
     
     private func checkFirstRun() {
+        guard !Constants.isRunningTests else { return }
+
         let setupCompleted = isSetupReady()
 
         if !setupCompleted {
@@ -211,25 +220,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         closeOnboardingIfNeeded()
         // Initialize hotkey manager
-        AppStateManager.shared.initializeHotkey()
+        AppStateManager.shared.refreshPermissionsAndHotkey(promptIfMissing: false)
         openMainWindow()
-
-        if !PermissionManager.checkAllPermissions() {
-            PermissionManager.requestAccessibilityPermission()
-            Task {
-                _ = await PermissionManager.requestMicrophonePermissionOrOpenSettings()
-            }
-        }
     }
 
     private func isSetupReady() -> Bool {
-        let venvExists = FileManager.default.fileExists(atPath: Constants.Setup.venvPath.path)
-        let pythonExists = FileManager.default.isExecutableFile(atPath: Constants.Setup.pythonPath.path)
-        let venvReady = venvExists || pythonExists
-        if venvReady && !SetupManager.isSetupComplete {
-            UserDefaults.standard.set(true, forKey: Constants.Setup.setupCompletedKey)
-        }
-        return venvReady
+        Constants.Setup.isRuntimeAvailable
     }
     
     // MARK: - Menu Actions

@@ -63,16 +63,14 @@ final class FileLogger {
     private let isEnabled: Bool
 
     private init() {
-        self.isEnabled = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil
-        let logsDirectory = Constants.supportDirectory.appendingPathComponent("logs")
-        try? FileManager.default.createDirectory(at: logsDirectory, withIntermediateDirectories: true)
-        self.fileURL = logsDirectory.appendingPathComponent("kotaeba.log")
+        self.isEnabled = !Constants.isRunningTests
+        let logsDir = Constants.supportDirectory.appendingPathComponent("logs")
+        try? FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
+        self.fileURL = logsDir.appendingPathComponent("kotaeba.log")
     }
 
     func log(_ level: LogLevel, category: String, message: String) {
-        guard isEnabled else {
-            return
-        }
+        guard isEnabled else { return }
 
         let timestamp = dateFormatter.string(from: Date())
         let line = "\(timestamp) [\(level.rawValue)] [\(category)] \(message)\n"
@@ -84,9 +82,7 @@ final class FileLogger {
     }
 
     private func append(line: String, to url: URL) {
-        guard let data = line.data(using: .utf8) else {
-            return
-        }
+        guard let data = line.data(using: .utf8) else { return }
 
         if !FileManager.default.fileExists(atPath: url.path) {
             FileManager.default.createFile(atPath: url.path, contents: nil)
@@ -98,7 +94,7 @@ final class FileLogger {
             try handle.write(contentsOf: data)
             try handle.close()
         } catch {
-            // Avoid recursive logging if file output fails.
+            // Avoid recursion by not logging failures here.
         }
     }
 
@@ -109,10 +105,7 @@ final class FileLogger {
             return
         }
 
-        let rotatedURL = fileURL
-            .deletingLastPathComponent()
-            .appendingPathComponent("kotaeba-\(Int(Date().timeIntervalSince1970)).log")
-
+        let rotatedURL = fileURL.deletingLastPathComponent().appendingPathComponent("kotaeba-\(Int(Date().timeIntervalSince1970)).log")
         do {
             if FileManager.default.fileExists(atPath: rotatedURL.path) {
                 try FileManager.default.removeItem(at: rotatedURL)
@@ -120,7 +113,7 @@ final class FileLogger {
             try FileManager.default.moveItem(at: fileURL, to: rotatedURL)
             FileManager.default.createFile(atPath: fileURL.path, contents: nil)
         } catch {
-            // Avoid recursive logging if rotation fails.
+            // Avoid recursion by not logging failures here.
         }
     }
 }

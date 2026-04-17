@@ -7,6 +7,7 @@ struct SettingsView: View {
     @AppStorage(Constants.UserDefaultsKeys.launchAtLogin) private var launchAtLogin = false
     @AppStorage(Constants.UserDefaultsKeys.serverHost) private var serverHost = Constants.Server.defaultHost
     @AppStorage(Constants.UserDefaultsKeys.serverPort) private var serverPort = Constants.Server.defaultPort
+    @AppStorage(Constants.UserDefaultsKeys.showDiagnosticsUI) private var showDiagnosticsUI = Constants.FeatureFlags.defaultDiagnosticsUI
     @AppStorage(Constants.UserDefaultsKeys.useClipboardFallback) private var useClipboardFallback = false
     @AppStorage(Constants.UserDefaultsKeys.safeModeEnabled) private var safeModeEnabled = true
     
@@ -16,7 +17,8 @@ struct SettingsView: View {
                 autoStartServer: $autoStartServer,
                 launchAtLogin: $launchAtLogin,
                 serverHost: $serverHost,
-                serverPort: $serverPort
+                serverPort: $serverPort,
+                showDiagnosticsUI: $showDiagnosticsUI
             )
             .tabItem {
                 Label("General", systemImage: "gear")
@@ -51,6 +53,8 @@ struct GeneralSettingsView: View {
     @Binding var launchAtLogin: Bool
     @Binding var serverHost: String
     @Binding var serverPort: Int
+    @Binding var showDiagnosticsUI: Bool
+    @State private var serverPortText = ""
     @State private var tokenDraft = ""
     @State private var hasStoredToken = false
     @State private var keychainMessage: String?
@@ -71,20 +75,23 @@ struct GeneralSettingsView: View {
             Section {
                 TextField("Host", text: $serverHost)
 
-                Stepper(value: $serverPort, in: 1...65535) {
-                    HStack {
-                        Text("Port")
-                        Spacer()
-                        Text("\(serverPort)")
-                            .foregroundColor(.secondary)
-                    }
+                HStack {
+                    Text("Port")
+                    Spacer()
+                    TextField("Port", text: $serverPortText)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 120)
+                        .multilineTextAlignment(.trailing)
+                        .help("Enter a port between 1 and 65535.")
                 }
             } header: {
                 Text("Server")
             }
 
             Section {
-                SecureField("Hugging Face token (optional)", text: $tokenDraft)
+                SecureField("Hugging Face API key (optional)", text: $tokenDraft)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
 
                 HStack {
                     Button("Save Token") {
@@ -98,7 +105,7 @@ struct GeneralSettingsView: View {
                     .disabled(!hasStoredToken)
                 }
 
-                Text(hasStoredToken ? "A token is stored securely in Keychain." : "No token stored.")
+                Text(hasStoredToken ? "An API key is stored securely in Keychain." : "No API key stored.")
                     .font(.caption)
                     .foregroundColor(.secondary)
 
@@ -110,14 +117,69 @@ struct GeneralSettingsView: View {
             } header: {
                 Text("Authentication")
             }
+
+            Section {
+                Toggle("Show test tools in sidebar", isOn: $showDiagnosticsUI)
+
+                Text("Keeps the Test App screen available so you can verify permissions, insertion, and runtime behavior from the installed app.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } header: {
+                Text("Developer")
+            }
         }
         .formStyle(.grouped)
         .padding()
         .onAppear {
             hasStoredToken = KeychainSecretStore.string(for: Constants.SecureSettingsKeys.huggingFaceToken) != nil
+            syncServerPortText()
+        }
+        .onChange(of: serverPortText) { _, newValue in
+            updateServerPortText(newValue)
+        }
+        .onChange(of: serverPort) { _, _ in
+            syncServerPortText()
         }
     }
-    
+
+    private func syncServerPortText() {
+        let normalizedPort = min(max(serverPort, 1), 65535)
+        if normalizedPort != serverPort {
+            serverPort = normalizedPort
+        }
+
+        let normalizedText = String(normalizedPort)
+        if serverPortText != normalizedText {
+            serverPortText = normalizedText
+        }
+    }
+
+    private func updateServerPortText(_ rawValue: String) {
+        let digitsOnly = rawValue.filter(\.isNumber)
+        if digitsOnly != rawValue {
+            serverPortText = digitsOnly
+            return
+        }
+
+        guard !digitsOnly.isEmpty else {
+            return
+        }
+
+        guard let parsedPort = Int(digitsOnly) else {
+            return
+        }
+
+        let clampedPort = min(max(parsedPort, 1), 65535)
+        if serverPort != clampedPort {
+            serverPort = clampedPort
+        }
+
+        let normalizedText = String(clampedPort)
+        if normalizedText != digitsOnly {
+            serverPortText = normalizedText
+        }
+    }
+
     private func setLaunchAtLogin(_ enabled: Bool) {
         // TODO: Implement launch at login using SMLoginItemSetEnabled
         // This requires additional setup with a helper app

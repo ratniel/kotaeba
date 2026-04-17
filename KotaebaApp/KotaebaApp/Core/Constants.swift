@@ -9,18 +9,34 @@ enum Constants {
     static let appName = "Kotaeba"
     static let appVersion = "1.0.0"
     static let supportDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!.appendingPathComponent("Kotaeba")
+    static var isRunningTests: Bool { Runtime.isRunningTests }
 
-    // MARK: - Runtime
     enum Runtime {
         static let isRunningTests =
             ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil ||
             NSClassFromString("XCTestCase") != nil
     }
+
+    enum FeatureFlags {
+        static var defaultDiagnosticsUI: Bool {
+            if let environmentOverride = ProcessInfo.processInfo.environment["KOTAEBA_SHOW_DIAGNOSTICS"] {
+                return environmentOverride == "1"
+            }
+            return true
+        }
+
+        static var showDiagnosticsUI: Bool {
+            if UserDefaults.standard.object(forKey: UserDefaultsKeys.showDiagnosticsUI) != nil {
+                return UserDefaults.standard.bool(forKey: UserDefaultsKeys.showDiagnosticsUI)
+            }
+            return defaultDiagnosticsUI
+        }
+    }
     
     // MARK: - Server
     enum Server {
         static let defaultHost = "localhost"
-        static let defaultPort = 8000
+        static let defaultPort = 9999
         static var host: String {
             let stored = UserDefaults.standard.string(forKey: UserDefaultsKeys.serverHost)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -128,11 +144,88 @@ enum Constants {
     
     // MARK: - Setup
     enum Setup {
-        static let venvPath = supportDirectory.appendingPathComponent(".venv")
         static let setupCompletedKey = "setupCompleted"
-        static let pythonPath = venvPath.appendingPathComponent("bin/python")
+        static let developmentVenvPath = supportDirectory.appendingPathComponent(".venv")
+        static let developmentPythonPath = developmentVenvPath.appendingPathComponent("bin/python")
+        static let venvPath = developmentVenvPath
+        static let bundledRuntimeFolderName = "Runtime"
+        static let bundledPythonRelativePaths = [
+            "\(bundledRuntimeFolderName)/bin/python3",
+            "\(bundledRuntimeFolderName)/bin/python",
+            "\(bundledRuntimeFolderName)/.venv/bin/python",
+            "python/bin/python3",
+            "python/bin/python"
+        ]
+
+        enum RuntimeSource {
+            case bundled
+            case developmentFallback
+            case unavailable
+
+            var displayName: String {
+                switch self {
+                case .bundled:
+                    return "Bundled app runtime"
+                case .developmentFallback:
+                    return "Development runtime"
+                case .unavailable:
+                    return "Runtime unavailable"
+                }
+            }
+        }
+
+        static func resolvedPythonPath(bundle: Bundle = .main) -> URL? {
+            let fileManager = FileManager.default
+
+            if let resourceURL = bundle.resourceURL {
+                for relativePath in bundledPythonRelativePaths {
+                    let candidate = resourceURL.appendingPathComponent(relativePath)
+                    if fileManager.isExecutableFile(atPath: candidate.path) {
+                        return candidate
+                    }
+                }
+            }
+
+            if fileManager.isExecutableFile(atPath: developmentPythonPath.path) {
+                return developmentPythonPath
+            }
+
+            return nil
+        }
+
+        static func runtimeSource(bundle: Bundle = .main) -> RuntimeSource {
+            guard let pythonPath = resolvedPythonPath(bundle: bundle) else {
+                return .unavailable
+            }
+
+            if pythonPath.path.hasPrefix(supportDirectory.path) {
+                return .developmentFallback
+            }
+
+            return .bundled
+        }
+
+        static var pythonPath: URL? {
+            resolvedPythonPath()
+        }
+
+        static var isRuntimeAvailable: Bool {
+            pythonPath != nil
+        }
+
+        static var runtimeDisplayPath: String {
+            pythonPath?.path ?? expectedBundledRuntimeLocation.path
+        }
+
+        static var runtimeSourceDisplayName: String {
+            runtimeSource().displayName
+        }
+
+        static var expectedBundledRuntimeLocation: URL {
+            (Bundle.main.resourceURL ?? Bundle.main.bundleURL).appendingPathComponent(bundledRuntimeFolderName)
+        }
     }
-    
+
     // MARK: - UserDefaults Keys
     enum UserDefaultsKeys {
         static let recordingMode = "recordingMode"
@@ -144,6 +237,7 @@ enum Constants {
         static let launchAtLogin = "launchAtLogin"
         static let useClipboardFallback = "useClipboardFallback"
         static let safeModeEnabled = "safeModeEnabled"
+        static let showDiagnosticsUI = "showDiagnosticsUI"
         static let selectedAudioDevice = "selectedAudioDevice"
         static let selectedModel = "selectedModel"
         static let didAutoDownloadDefaultModel = "didAutoDownloadDefaultModel"
