@@ -98,7 +98,7 @@ class TextInserter {
             return .failure(.secureInputEnabled)
         }
 
-        // Method 2: Unicode CGEvent (fast)
+        // Method 2: Unicode CGEvent (fast when the target exposes readable text state)
         if insertUsingUnicodeEvent(text) {
             Log.textInsertion.info("Unicode event insert succeeded")
             return .success(method: .unicodeEvent)
@@ -122,6 +122,11 @@ class TextInserter {
     /// Insert text using CGEvent with Unicode string
     /// This is fast and supports unicode characters
     private func insertUsingUnicodeEvent(_ text: String) -> Bool {
+        guard let snapshot = focusedTextSnapshot() else {
+            Log.textInsertion.debug("Cannot verify Unicode event insertion because focused text state is unavailable")
+            return false
+        }
+
         let source = CGEventSource(stateID: .hidSystemState)
         
         // Convert string to UTF-16 code units
@@ -145,8 +150,8 @@ class TextInserter {
         // Post the events
         keyDown.post(tap: .cghidEventTap)
         keyUp.post(tap: .cghidEventTap)
-        
-        return true
+
+        return verifyInsertion(text: text, snapshot: snapshot)
     }
     
     // MARK: - Method 2: Clipboard + Paste (Fallback)
@@ -162,25 +167,31 @@ class TextInserter {
         
         let pasteboard = NSPasteboard.general
         
-        // Save current clipboard contents
-        let previousContents = pasteboard.string(forType: .string)
+        // Save current clipboard contents, including non-string representations.
+        let previousContents = PasteboardSnapshot(items: Self.clonePasteboardItems(pasteboard.pasteboardItems))
         
         // Set our text to clipboard
         pasteboard.clearContents()
         let success = pasteboard.setString(text, forType: .string)
+        let insertionChangeCount = pasteboard.changeCount
         Log.textInsertion.info("Set clipboard contents: \(success ? "success" : "failure")")
         guard success else { return false }
         
         // Simulate Cmd+V
         simulatePaste()
         
-        // Restore previous clipboard after short delay
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            if let previous = previousContents {
-                pasteboard.clearContents()
-                pasteboard.setString(previous, forType: .string)
-                Log.textInsertion.debug("Restored previous clipboard")
+        // Restore previous clipboard after paste has had a chance to consume it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
+            guard pasteboard.changeCount == insertionChangeCount else {
+                Log.textInsertion.debug("Skipping clipboard restore because clipboard changed after insertion")
+                return
             }
+
+            pasteboard.clearContents()
+            if !previousContents.items.isEmpty {
+                pasteboard.writeObjects(previousContents.items)
+            }
+            Log.textInsertion.debug("Restored previous clipboard")
         }
 
         return true
@@ -248,7 +259,10 @@ class TextInserter {
             return .failure(.accessibilityInsertFailed)
         }
 
-        let range = copySelectedRange(element) ?? CFRange(location: currentValue.utf16.count, length: 0)
+        guard let range = copySelectedRange(element) else {
+            Log.textInsertion.debug("Focused element exposes a value but no selected text range")
+            return .failure(.accessibilityInsertFailed)
+        }
         let newValue = Self.applyInsertion(text: text, to: currentValue, range: range)
 
         guard isAttributeSettable(element, attribute: kAXValueAttribute) else {
@@ -268,6 +282,47 @@ class TextInserter {
         }
 
         return .success(())
+    }
+
+    private struct FocusedTextSnapshot {
+        let element: AXUIElement
+        let value: String
+        let selectedRange: CFRange
+    }
+
+    private struct PasteboardSnapshot {
+        let items: [NSPasteboardItem]
+    }
+
+    private func focusedTextSnapshot() -> FocusedTextSnapshot? {
+        let systemWide = AXUIElementCreateSystemWide()
+        var focusedRef: CFTypeRef?
+        let focusedResult = AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElementAttribute as CFString, &focusedRef)
+        guard focusedResult == .success, let focusedRef else {
+            return nil
+        }
+
+        let element = unsafeBitCast(focusedRef, to: AXUIElement.self)
+        guard let value = copyStringAttribute(element, attribute: kAXValueAttribute),
+              let selectedRange = copySelectedRange(element) else {
+            return nil
+        }
+
+        return FocusedTextSnapshot(element: element, value: value, selectedRange: selectedRange)
+    }
+
+    private func verifyInsertion(text: String, snapshot: FocusedTextSnapshot) -> Bool {
+        let expectedValue = Self.applyInsertion(text: text, to: snapshot.value, range: snapshot.selectedRange)
+
+        for _ in 0..<10 {
+            usleep(20000)
+            if copyStringAttribute(snapshot.element, attribute: kAXValueAttribute) == expectedValue {
+                return true
+            }
+        }
+
+        Log.textInsertion.debug("Unicode event insertion could not be verified")
+        return false
     }
 
     private func isAttributeSettable(_ element: AXUIElement, attribute: String) -> Bool {
@@ -317,6 +372,20 @@ class TextInserter {
         var updated = currentValue
         updated.replaceSubrange(startIndex..<endIndex, with: text)
         return updated
+    }
+
+    static func clonePasteboardItems(_ items: [NSPasteboardItem]?) -> [NSPasteboardItem] {
+        items?.map { item in
+            let clonedItem = NSPasteboardItem()
+            for type in item.types {
+                if let data = item.data(forType: type) {
+                    clonedItem.setData(data, forType: type)
+                } else if let string = item.string(forType: type) {
+                    clonedItem.setString(string, forType: type)
+                }
+            }
+            return clonedItem
+        } ?? []
     }
     
     // MARK: - (Reserved for future insertion strategies)
