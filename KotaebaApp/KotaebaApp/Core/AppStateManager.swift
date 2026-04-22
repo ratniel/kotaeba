@@ -49,6 +49,7 @@ class AppStateManager: ObservableObject {
     private var textInserter: TextInserter?
     private let statisticsManager: any StatisticsManaging
     private var permissionRefreshTask: Task<Void, Never>?
+    private var pendingWebSocketDisconnectTask: Task<Void, Never>?
     
     // MARK: - Session Tracking
     
@@ -252,7 +253,10 @@ class AppStateManager: ObservableObject {
     }
     
     func stopServer() {
+        pendingWebSocketDisconnectTask?.cancel()
+        pendingWebSocketDisconnectTask = nil
         webSocketClient?.disconnect()
+        webSocketClient = nil
         audioCapture?.stopRecording()
         serverManager?.stop()
         state = .idle
@@ -267,6 +271,11 @@ class AppStateManager: ObservableObject {
             Log.app.warning("Cannot start recording - server not running")
             return
         }
+
+        pendingWebSocketDisconnectTask?.cancel()
+        pendingWebSocketDisconnectTask = nil
+        webSocketClient?.disconnect()
+        webSocketClient = nil
         
         state = .connecting
         currentTranscription = ""
@@ -286,10 +295,8 @@ class AppStateManager: ObservableObject {
         
         // Stop audio first
         audioCapture?.stopRecording()
-        
-        // Disconnect WebSocket
-        webSocketClient?.disconnect()
-        webSocketClient = nil
+
+        scheduleWebSocketDisconnectAfterFinalTranscriptGrace()
         
         // Save session statistics
         if let startTime = sessionStartTime {
@@ -312,6 +319,21 @@ class AppStateManager: ObservableObject {
         
         state = .serverRunning
         Log.app.info("Recording stopped")
+    }
+
+    private func scheduleWebSocketDisconnectAfterFinalTranscriptGrace() {
+        pendingWebSocketDisconnectTask?.cancel()
+        guard let client = webSocketClient else { return }
+
+        pendingWebSocketDisconnectTask = Task { [weak self, weak client] in
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            await MainActor.run {
+                guard let self, let client, self.webSocketClient === client else { return }
+                self.webSocketClient?.disconnect()
+                self.webSocketClient = nil
+                self.pendingWebSocketDisconnectTask = nil
+            }
+        }
     }
     
     func toggleRecording() {
@@ -519,6 +541,8 @@ class AppStateManager: ObservableObject {
     
     func shutdown() {
         permissionRefreshTask?.cancel()
+        pendingWebSocketDisconnectTask?.cancel()
+        pendingWebSocketDisconnectTask = nil
         stopRecording()
         stopServer()
         hotkeyManager?.stop()
@@ -528,8 +552,13 @@ class AppStateManager: ObservableObject {
     /// Best-effort cleanup before app termination to avoid leaving server processes running.
     func shutdownForTermination() async {
         permissionRefreshTask?.cancel()
+        pendingWebSocketDisconnectTask?.cancel()
+        pendingWebSocketDisconnectTask = nil
         stopRecording()
+        pendingWebSocketDisconnectTask?.cancel()
+        pendingWebSocketDisconnectTask = nil
         webSocketClient?.disconnect()
+        webSocketClient = nil
         audioCapture?.stopRecording()
         await serverManager?.stopAndWait(timeout: 2.0)
         hotkeyManager?.stop()
