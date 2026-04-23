@@ -1,4 +1,5 @@
 import XCTest
+import AppKit
 @testable import KotaebaApp
 
 final class TextInsertionUtilsTests: XCTestCase {
@@ -27,5 +28,18 @@ final class TextInsertionUtilsTests: XCTestCase {
         let value = "Hi 😀 there"
         let result = TextInserter.applyInsertion(text: "🙂", to: value, range: CFRange(location: 3, length: 2))
         XCTAssertEqual(result, "Hi 🙂 there")
+    }
+
+    func testPasteboardItemClonePreservesMultipleTypes() {
+        let customType = NSPasteboard.PasteboardType("com.kotaeba.test.binary")
+        let item = NSPasteboardItem()
+        item.setString("hello", forType: .string)
+        item.setData(Data([0, 1, 2, 3]), forType: customType)
+
+        let clonedItems = TextInserter.clonePasteboardItems([item])
+
+        XCTAssertEqual(clonedItems.count, 1)
+        XCTAssertEqual(clonedItems[0].string(forType: .string), "hello")
+        XCTAssertEqual(clonedItems[0].data(forType: customType), Data([0, 1, 2, 3]))
     }
 }
