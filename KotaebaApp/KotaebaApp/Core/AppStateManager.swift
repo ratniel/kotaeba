@@ -571,8 +571,12 @@ class AppStateManager: ObservableObject {
 
 extension AppStateManager: WebSocketClientDelegate {
     
-    nonisolated func webSocketDidConnect() {
+    nonisolated func webSocketDidConnect(_ client: WebSocketClient) {
         Task { @MainActor in
+            guard client === webSocketClient else {
+                Log.websocket.debug("Ignoring connect callback from stale WebSocket client")
+                return
+            }
             Log.websocket.info("webSocketDidConnect received (state: \(state))")
             Log.websocket.info("WebSocket connected, starting audio...")
 
@@ -588,14 +592,20 @@ extension AppStateManager: WebSocketClientDelegate {
                 Log.audio.error("Failed to start audio: \(error)")
                 state = .error(error.localizedDescription)
                 webSocketClient?.disconnect()
+                webSocketClient = nil
             }
         }
     }
     
-    nonisolated func webSocketDidDisconnect(error: Error?) {
+    nonisolated func webSocketDidDisconnect(_ client: WebSocketClient, error: Error?) {
         Task { @MainActor in
+            guard client === webSocketClient else {
+                Log.websocket.debug("Ignoring disconnect callback from stale WebSocket client")
+                return
+            }
             Log.websocket.info("webSocketDidDisconnect received (state: \(state), error: \(error?.localizedDescription ?? "none"))")
             audioCapture?.stopRecording()
+            webSocketClient = nil
             if state == .recording || state == .connecting {
                 if let error = error {
                     Log.websocket.error("WebSocket disconnected with error: \(error)")
@@ -605,14 +615,22 @@ extension AppStateManager: WebSocketClientDelegate {
         }
     }
     
-    nonisolated func webSocketDidReceiveTranscription(_ transcription: ServerTranscription) {
+    nonisolated func webSocketDidReceiveTranscription(_ client: WebSocketClient, transcription: ServerTranscription) {
         Task { @MainActor in
+            guard client === webSocketClient else {
+                Log.websocket.debug("Ignoring transcription from stale WebSocket client")
+                return
+            }
             handleTranscription(transcription.text, isPartial: transcription.isPartial)
         }
     }
     
-    nonisolated func webSocketDidReceiveStatus(_ status: ServerStatus) {
+    nonisolated func webSocketDidReceiveStatus(_ client: WebSocketClient, status: ServerStatus) {
         Task { @MainActor in
+            guard client === webSocketClient else {
+                Log.websocket.debug("Ignoring status from stale WebSocket client")
+                return
+            }
             Log.server.info("Server status: \(status.status) - \(status.message)")
         }
     }

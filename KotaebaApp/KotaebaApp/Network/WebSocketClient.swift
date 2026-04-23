@@ -2,10 +2,10 @@ import Foundation
 
 /// Delegate protocol for WebSocket events
 protocol WebSocketClientDelegate: AnyObject {
-    func webSocketDidConnect()
-    func webSocketDidDisconnect(error: Error?)
-    func webSocketDidReceiveTranscription(_ transcription: ServerTranscription)
-    func webSocketDidReceiveStatus(_ status: ServerStatus)
+    func webSocketDidConnect(_ client: WebSocketClient)
+    func webSocketDidDisconnect(_ client: WebSocketClient, error: Error?)
+    func webSocketDidReceiveTranscription(_ client: WebSocketClient, transcription: ServerTranscription)
+    func webSocketDidReceiveStatus(_ client: WebSocketClient, status: ServerStatus)
 }
 
 /// WebSocket client for communicating with mlx_audio.server
@@ -136,11 +136,11 @@ class WebSocketClient: NSObject {
             switch serverMessage {
             case .transcription(let transcription):
                 Log.websocket.debug("Parsed transcription: \"\(transcription.text)\" (partial: \(transcription.isPartial))")
-                delegate?.webSocketDidReceiveTranscription(transcription)
+                delegate?.webSocketDidReceiveTranscription(self, transcription: transcription)
                 
             case .status(let status):
                 Log.websocket.info("Status: \(status.status) - \(status.message)")
-                delegate?.webSocketDidReceiveStatus(status)
+                delegate?.webSocketDidReceiveStatus(self, status: status)
                 
             case .unknown(let raw):
                 Log.websocket.warning("Unknown message format: \(raw.prefix(100))...")
@@ -158,7 +158,7 @@ class WebSocketClient: NSObject {
         guard !hasReportedDisconnect else { return }
         hasReportedDisconnect = true
         isConnected = false
-        delegate?.webSocketDidDisconnect(error: error)
+        delegate?.webSocketDidDisconnect(self, error: error)
     }
 }
 
@@ -169,7 +169,7 @@ extension WebSocketClient: URLSessionWebSocketDelegate {
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
         Log.websocket.info("Connected")
         isConnected = true
-        delegate?.webSocketDidConnect()
+        delegate?.webSocketDidConnect(self)
     }
     
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
