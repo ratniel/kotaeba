@@ -49,6 +49,7 @@ class AppStateManager: ObservableObject {
     private var textInserter: TextInserter?
     private let statisticsManager: any StatisticsManaging
     private var permissionRefreshTask: Task<Void, Never>?
+    private var pendingWebSocketDisconnectTask: Task<Void, Never>?
     
     // MARK: - Session Tracking
     
@@ -252,7 +253,10 @@ class AppStateManager: ObservableObject {
     }
     
     func stopServer() {
+        pendingWebSocketDisconnectTask?.cancel()
+        pendingWebSocketDisconnectTask = nil
         webSocketClient?.disconnect()
+        webSocketClient = nil
         audioCapture?.stopRecording()
         serverManager?.stop()
         state = .idle
@@ -267,6 +271,11 @@ class AppStateManager: ObservableObject {
             Log.app.warning("Cannot start recording - server not running")
             return
         }
+
+        pendingWebSocketDisconnectTask?.cancel()
+        pendingWebSocketDisconnectTask = nil
+        webSocketClient?.disconnect()
+        webSocketClient = nil
         
         state = .connecting
         currentTranscription = ""
@@ -286,10 +295,8 @@ class AppStateManager: ObservableObject {
         
         // Stop audio first
         audioCapture?.stopRecording()
-        
-        // Disconnect WebSocket
-        webSocketClient?.disconnect()
-        webSocketClient = nil
+
+        scheduleWebSocketDisconnectAfterFinalTranscriptGrace()
         
         // Save session statistics
         if let startTime = sessionStartTime {
@@ -312,6 +319,19 @@ class AppStateManager: ObservableObject {
         
         state = .serverRunning
         Log.app.info("Recording stopped")
+    }
+
+    private func scheduleWebSocketDisconnectAfterFinalTranscriptGrace() {
+        pendingWebSocketDisconnectTask?.cancel()
+        guard let client = webSocketClient else { return }
+
+        pendingWebSocketDisconnectTask = Task { [weak self, weak client] in
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            guard let self, let client, self.webSocketClient === client else { return }
+            self.webSocketClient?.disconnect()
+            self.webSocketClient = nil
+            self.pendingWebSocketDisconnectTask = nil
+        }
     }
     
     func toggleRecording() {
@@ -519,6 +539,8 @@ class AppStateManager: ObservableObject {
     
     func shutdown() {
         permissionRefreshTask?.cancel()
+        pendingWebSocketDisconnectTask?.cancel()
+        pendingWebSocketDisconnectTask = nil
         stopRecording()
         stopServer()
         hotkeyManager?.stop()
@@ -528,8 +550,13 @@ class AppStateManager: ObservableObject {
     /// Best-effort cleanup before app termination to avoid leaving server processes running.
     func shutdownForTermination() async {
         permissionRefreshTask?.cancel()
+        pendingWebSocketDisconnectTask?.cancel()
+        pendingWebSocketDisconnectTask = nil
         stopRecording()
+        pendingWebSocketDisconnectTask?.cancel()
+        pendingWebSocketDisconnectTask = nil
         webSocketClient?.disconnect()
+        webSocketClient = nil
         audioCapture?.stopRecording()
         await serverManager?.stopAndWait(timeout: 2.0)
         hotkeyManager?.stop()
@@ -542,8 +569,12 @@ class AppStateManager: ObservableObject {
 
 extension AppStateManager: WebSocketClientDelegate {
     
-    nonisolated func webSocketDidConnect() {
+    nonisolated func webSocketDidConnect(_ client: WebSocketClient) {
         Task { @MainActor in
+            guard client === webSocketClient else {
+                Log.websocket.debug("Ignoring connect callback from stale WebSocket client")
+                return
+            }
             Log.websocket.info("webSocketDidConnect received (state: \(state))")
             Log.websocket.info("WebSocket connected, starting audio...")
 
@@ -559,14 +590,20 @@ extension AppStateManager: WebSocketClientDelegate {
                 Log.audio.error("Failed to start audio: \(error)")
                 state = .error(error.localizedDescription)
                 webSocketClient?.disconnect()
+                webSocketClient = nil
             }
         }
     }
     
-    nonisolated func webSocketDidDisconnect(error: Error?) {
+    nonisolated func webSocketDidDisconnect(_ client: WebSocketClient, error: Error?) {
         Task { @MainActor in
+            guard client === webSocketClient else {
+                Log.websocket.debug("Ignoring disconnect callback from stale WebSocket client")
+                return
+            }
             Log.websocket.info("webSocketDidDisconnect received (state: \(state), error: \(error?.localizedDescription ?? "none"))")
             audioCapture?.stopRecording()
+            webSocketClient = nil
             if state == .recording || state == .connecting {
                 if let error = error {
                     Log.websocket.error("WebSocket disconnected with error: \(error)")
@@ -576,14 +613,22 @@ extension AppStateManager: WebSocketClientDelegate {
         }
     }
     
-    nonisolated func webSocketDidReceiveTranscription(_ transcription: ServerTranscription) {
+    nonisolated func webSocketDidReceiveTranscription(_ client: WebSocketClient, transcription: ServerTranscription) {
         Task { @MainActor in
+            guard client === webSocketClient else {
+                Log.websocket.debug("Ignoring transcription from stale WebSocket client")
+                return
+            }
             handleTranscription(transcription.text, isPartial: transcription.isPartial)
         }
     }
     
-    nonisolated func webSocketDidReceiveStatus(_ status: ServerStatus) {
+    nonisolated func webSocketDidReceiveStatus(_ client: WebSocketClient, status: ServerStatus) {
         Task { @MainActor in
+            guard client === webSocketClient else {
+                Log.websocket.debug("Ignoring status from stale WebSocket client")
+                return
+            }
             Log.server.info("Server status: \(status.status) - \(status.message)")
         }
     }

@@ -132,6 +132,19 @@ class HotkeyManager {
         let isControlPressed = flags.contains(.maskControl)
         let isOtherModifiers = flags.contains(.maskCommand) || flags.contains(.maskAlternate) || flags.contains(.maskShift)
         let isTargetKey = keyCode == targetKeyCode
+
+        if isHotkeyPressed {
+            if type == .keyUp && isTargetKey {
+                handleKeyUp()
+                return nil
+            }
+
+            if type == .flagsChanged && recordingMode == .hold && !isControlPressed {
+                Log.hotkey.debug("Control released while hotkey was active")
+                handleKeyUp()
+                return Unmanaged.passRetained(event)
+            }
+        }
         
         // Only handle if it's our hotkey (Ctrl+X with no other modifiers)
         guard isTargetKey && isControlPressed && !isOtherModifiers else {
@@ -144,8 +157,7 @@ class HotkeyManager {
             return nil  // Consume the event (don't pass to other apps)
             
         case .keyUp:
-            handleKeyUp()
-            return nil  // Consume the event
+            return nil  // Already handled above when pressed
             
         default:
             return Unmanaged.passRetained(event)
