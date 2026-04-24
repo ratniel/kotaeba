@@ -56,10 +56,6 @@ enum Constants {
         static var websocketURL: URL {
             URL(string: "ws://\(host):\(port)\(websocketPath)")!
         }
-        static var healthURL: URL {
-            // mlx_audio.server doesn't have /health endpoint, using root endpoint
-            URL(string: "http://\(host):\(port)/")!
-        }
         static let healthCheckInterval: TimeInterval = 5.0
         static let startupTimeout: TimeInterval = 30.0
     }
@@ -80,16 +76,14 @@ enum Constants {
             let description: String
         }
 
+        static let currentQwenIdentifier = "Qwen/Qwen3-ASR-1.7B"
+        static let legacyQwenIdentifier = "mlx-community/Qwen3-ASR-0.6B-8bit"
+
         static let availableModels: [Model] = [
             Model(
                 name: "Parakeet-TDT-0.6B",
                 identifier: "mlx-community/parakeet-tdt-0.6b-v2",
                 description: "Fast, low memory (Default)"
-            ),
-            Model(
-                name: "Qwen3-ASR-0.6B",
-                identifier: "mlx-community/Qwen3-ASR-0.6B-8bit",
-                description: "Optimized 8-bit quantized"
             ),
             Model(
                 name: "Whisper Large V3 Turbo",
@@ -99,13 +93,51 @@ enum Constants {
         ]
 
         static let defaultModel = availableModels[0]
+
+        static func model(withIdentifier identifier: String) -> Model? {
+            availableModels.first(where: { $0.identifier == normalizedIdentifier(identifier) })
+        }
+
+        static func normalizedIdentifier(_ identifier: String) -> String {
+            switch identifier {
+            case legacyQwenIdentifier:
+                return currentQwenIdentifier
+            default:
+                return identifier
+            }
+        }
+
+        static func isQwenModelIdentifier(_ identifier: String) -> Bool {
+            normalizedIdentifier(identifier) == currentQwenIdentifier
+        }
+
+        static func startupValidationMessage(for model: Model, rawError: String) -> String {
+            if isQwenModelIdentifier(model.identifier),
+               rawError.contains("ModelConfig.__init__()") {
+                return "\(model.name) could not be loaded because the current MLX runtime misclassifies Qwen ASR and does not include a usable STT backend for it yet. Use \(defaultModel.name) or Whisper Large V3 Turbo for now."
+            }
+
+            if isQwenModelIdentifier(model.identifier),
+               rawError.contains("Model type None not supported") {
+                return "\(model.name) was routed through the STT path, but the installed MLX runtime still has no qwen3_asr STT implementation. Use \(defaultModel.name) or Whisper Large V3 Turbo for now."
+            }
+
+            if isQwenModelIdentifier(model.identifier),
+               (rawError.contains("does not recognize this architecture") || rawError.contains("qwen3_asr")) {
+                return "\(model.name) was found successfully, but the bundled Transformers and MLX runtime stack does not understand the qwen3_asr architecture yet. Use \(defaultModel.name) or Whisper Large V3 Turbo for now."
+            }
+
+            return "\(model.name) failed validation during server startup. Open Test App for full diagnostics."
+        }
     }
     
     // MARK: - Hotkey
     enum Hotkey {
         static let defaultKeyCode: UInt16 = 7  // 'x' key
-        static let defaultModifiers: UInt32 = 1 << 18  // Control key
-        static let defaultDisplayString = "⌃X"
+        static let defaultModifiers: HotkeyModifiers = .control
+        static let escapeKeyCode: UInt16 = 53
+        static let minimumHoldDuration: TimeInterval = 0.18
+        static let defaultDisplayString = HotkeyShortcut.default.displayString
     }
     
     // MARK: - UI
@@ -149,6 +181,7 @@ enum Constants {
         static let developmentPythonPath = developmentVenvPath.appendingPathComponent("bin/python")
         static let venvPath = developmentVenvPath
         static let bundledRuntimeFolderName = "Runtime"
+        static let bundledRuntimeProjectFolderName = "PythonRuntime"
         static let bundledPythonRelativePaths = [
             "\(bundledRuntimeFolderName)/bin/python3",
             "\(bundledRuntimeFolderName)/bin/python",
@@ -224,6 +257,10 @@ enum Constants {
         static var expectedBundledRuntimeLocation: URL {
             (Bundle.main.resourceURL ?? Bundle.main.bundleURL).appendingPathComponent(bundledRuntimeFolderName)
         }
+
+        static var bundledRuntimeProjectLocation: URL {
+            (Bundle.main.resourceURL ?? Bundle.main.bundleURL).appendingPathComponent(bundledRuntimeProjectFolderName)
+        }
     }
 
     // MARK: - UserDefaults Keys
@@ -233,6 +270,7 @@ enum Constants {
         static let hotkeyModifiers = "hotkeyModifiers"
         static let serverHost = "serverHost"
         static let serverPort = "serverPort"
+        static let serverPortMigrationVersion = "serverPortMigrationVersion"
         static let autoStartServer = "autoStartServer"
         static let launchAtLogin = "launchAtLogin"
         static let useClipboardFallback = "useClipboardFallback"
@@ -246,6 +284,43 @@ enum Constants {
     // MARK: - Secure Settings Keys
     enum SecureSettingsKeys {
         static let huggingFaceToken = "HF_TOKEN"
+    }
+}
+
+enum SettingsMigration {
+    private static let legacyLocalhostPort = 8000
+    static let currentVersion = 2
+    private static let loopbackHosts = ["localhost", "127.0.0.1"]
+
+    static func migrateIfNeeded(defaults: UserDefaults = .standard) {
+        let migrationVersion = defaults.integer(forKey: Constants.UserDefaultsKeys.serverPortMigrationVersion)
+        guard migrationVersion < currentVersion else { return }
+
+        defer {
+            defaults.set(currentVersion, forKey: Constants.UserDefaultsKeys.serverPortMigrationVersion)
+        }
+
+        migrateLocalhostPortIfNeeded(defaults: defaults)
+        migrateUnsupportedQwenIdentifierIfNeeded(defaults: defaults)
+    }
+
+    private static func migrateLocalhostPortIfNeeded(defaults: UserDefaults) {
+        guard defaults.object(forKey: Constants.UserDefaultsKeys.serverPort) != nil else { return }
+        guard defaults.integer(forKey: Constants.UserDefaultsKeys.serverPort) == legacyLocalhostPort else { return }
+
+        let storedHost = defaults.string(forKey: Constants.UserDefaultsKeys.serverHost)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? Constants.Server.defaultHost
+        guard loopbackHosts.contains(storedHost) else { return }
+
+        defaults.set(Constants.Server.defaultPort, forKey: Constants.UserDefaultsKeys.serverPort)
+    }
+
+    private static func migrateUnsupportedQwenIdentifierIfNeeded(defaults: UserDefaults) {
+        guard let selectedModel = defaults.string(forKey: Constants.UserDefaultsKeys.selectedModel) else { return }
+        guard Constants.Models.isQwenModelIdentifier(selectedModel) else { return }
+
+        defaults.set(Constants.Models.defaultModel.identifier, forKey: Constants.UserDefaultsKeys.selectedModel)
     }
 }
 
@@ -306,6 +381,36 @@ enum ModelDownloadStatus {
         case .downloading: return Constants.UI.accentOrange
         case .downloaded: return Constants.UI.successGreen
         case .notDownloaded: return Constants.UI.textSecondary
+        }
+    }
+}
+
+// MARK: - Server Startup
+
+enum ServerStartupStage: Equatable {
+    case preparingRuntime
+    case validatingModel
+    case launchingServer
+
+    var title: String {
+        switch self {
+        case .preparingRuntime:
+            return "Preparing runtime..."
+        case .validatingModel:
+            return "Validating model..."
+        case .launchingServer:
+            return "Starting server..."
+        }
+    }
+
+    func detail(modelName: String) -> String {
+        switch self {
+        case .preparingRuntime:
+            return "Preparing speech runtime..."
+        case .validatingModel:
+            return "Checking model: \(modelName)"
+        case .launchingServer:
+            return "Launching local transcription server..."
         }
     }
 }

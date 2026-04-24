@@ -1,8 +1,11 @@
 import Darwin
 import Foundation
 
+typealias ServerStartupProgressHandler = (ServerStartupStage) -> Void
+
 protocol ServerManaging: AnyObject {
-    func start(model: String) async throws
+    var unexpectedExitHandler: (@MainActor (String) -> Void)? { get set }
+    func start(model: String, progressHandler: ServerStartupProgressHandler?) async throws
     func stop()
     func stopAndWait(timeout: TimeInterval) async
     func checkModelExists(_ modelIdentifier: String) async throws -> Bool
@@ -24,16 +27,24 @@ class ServerManager {
     private var outputPipe: Pipe?
     private var healthCheckTimer: Timer?
     private let serverMetadataURL = Constants.supportDirectory.appendingPathComponent("server-process.json")
+    private var isStopping = false
     
+    var unexpectedExitHandler: (@MainActor (String) -> Void)?
     private(set) var isRunning = false
     
     // MARK: - Server Control
 
     /// Start the mlx_audio.server subprocess
-    /// The model will be loaded when the first WebSocket connection is established
-    func start(model: String) async throws {
+    /// Runs a startup-time model validation before launching the server so model
+    /// failures are discovered before the first hotkey/WebSocket session.
+    func start(model: String, progressHandler: ServerStartupProgressHandler? = nil) async throws {
         guard !isRunning else {
             throw ServerError.alreadyRunning
+        }
+
+        isStopping = false
+        await MainActor.run {
+            progressHandler?(.preparingRuntime)
         }
 
         // Ensure support directory exists
@@ -49,13 +60,19 @@ class ServerManager {
         // up talking to a stale/orphaned process instead.
         guard await checkHealth() == false else {
             throw ServerError.failedToStart(
-                "Another server is already listening on \(Constants.Server.host):\(Constants.Server.port). Stop the stale Kotaeba/MLX server process and try again."
+                "Another server is already listening on \(Constants.Server.host):\(Constants.Server.port). Stop the stale Kotaeba/MLX server process and try again.",
+                nil
             )
         }
 
         guard let pythonURL = Constants.Setup.pythonPath else {
             throw ServerError.setupRequired
         }
+
+        await MainActor.run {
+            progressHandler?(.validatingModel)
+        }
+        try await validateModelStartup(modelIdentifier: model, pythonURL: pythonURL)
 
         let process = Process()
         process.executableURL = pythonURL
@@ -95,9 +112,12 @@ class ServerManager {
 
         // Start process
         do {
+            await MainActor.run {
+                progressHandler?(.launchingServer)
+            }
             try process.run()
             let processID = process.processIdentifier
-            let isolatedGroupID = try await waitForDedicatedProcessGroup(for: processID)
+            let isolatedGroupID = await resolveTrackedProcessGroup(for: processID)
             isRunning = true
             processGroupID = isolatedGroupID
             try persistServerMetadata(
@@ -106,13 +126,19 @@ class ServerManager {
                 pythonURL: pythonURL,
                 logDirectory: logsDir
             )
+            let trackingDescription: String
+            if let isolatedGroupID {
+                trackingDescription = "PID: \(processID), PGID: \(isolatedGroupID)"
+            } else {
+                trackingDescription = "PID: \(processID), process-only tracking"
+            }
             Log.server.info(
-                "Server process started, will load model '\(model)' on first connection (PID: \(processID), PGID: \(isolatedGroupID))"
+                "Server process started after validating model '\(model)' (\(trackingDescription))"
             )
         } catch {
             terminateTrackedServer(force: true)
             cleanup()
-            throw ServerError.failedToStart(error.localizedDescription)
+            throw ServerError.failedToStart(error.localizedDescription, nil)
         }
 
         do {
@@ -131,6 +157,7 @@ class ServerManager {
     /// Stop the server subprocess
     func stop() {
         stopHealthMonitoring()
+        isStopping = true
         
         guard process != nil || processGroupID != nil else {
             isRunning = false
@@ -156,6 +183,7 @@ class ServerManager {
     /// Intended for app shutdown to avoid leaving orphaned processes.
     func stopAndWait(timeout: TimeInterval) async {
         stopHealthMonitoring()
+        isStopping = true
 
         guard process != nil || processGroupID != nil else {
             isRunning = false
@@ -195,6 +223,8 @@ class ServerManager {
         outputPipe = nil
         process = nil
         processGroupID = nil
+        isRunning = false
+        isStopping = false
         clearServerMetadata()
     }
     
@@ -207,7 +237,8 @@ class ServerManager {
         while Date().timeIntervalSince(startTime) < timeout {
             guard process.isRunning else {
                 throw ServerError.failedToStart(
-                    "Server process exited before becoming ready. Check for a port conflict or runtime startup error."
+                    "Server process exited before becoming ready. Check for a port conflict or runtime startup error.",
+                    nil
                 )
             }
 
@@ -217,7 +248,8 @@ class ServerManager {
                 try await Task.sleep(nanoseconds: 300_000_000)
                 guard process.isRunning else {
                     throw ServerError.failedToStart(
-                        "Server process exited after startup. Another process may already be using \(Constants.Server.host):\(Constants.Server.port)."
+                        "Server process exited after startup. Another process may already be using \(Constants.Server.host):\(Constants.Server.port).",
+                        nil
                     )
                 }
                 Log.server.info("Server is ready")
@@ -230,8 +262,14 @@ class ServerManager {
     }
 
     private func serverLaunchArguments(logDirectory: URL) -> [String] {
-        let launcher =
-            "import os,sys; os.setsid(); os.execve(sys.executable, [sys.executable, '-m', 'mlx_audio.server', *sys.argv[1:]], os.environ)"
+        let launcher = """
+        import os,sys
+        try:
+            os.setsid()
+        except PermissionError:
+            pass
+        os.execve(sys.executable, [sys.executable, '-m', 'mlx_audio.server', *sys.argv[1:]], os.environ)
+        """
 
         return [
             "-c",
@@ -245,8 +283,9 @@ class ServerManager {
         ]
     }
 
-    private func waitForDedicatedProcessGroup(for processID: pid_t) async throws -> pid_t {
+    private func resolveTrackedProcessGroup(for processID: pid_t) async -> pid_t? {
         let deadline = Date().addingTimeInterval(2.0)
+        var inheritedGroupObservations = 0
 
         while Date() < deadline {
             let groupID = getpgid(processID)
@@ -254,10 +293,27 @@ class ServerManager {
                 return groupID
             }
 
+            if groupID == -1 {
+                return nil
+            }
+
+            if groupID > 0 {
+                inheritedGroupObservations += 1
+                if inheritedGroupObservations >= 3 {
+                    Log.server.warning(
+                        "Dedicated server process group unavailable; using process-only tracking for PID \(processID)"
+                    )
+                    return nil
+                }
+            }
+
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
 
-        throw ServerError.failedToStart("Failed to verify dedicated server process group.")
+        Log.server.warning(
+            "Timed out waiting for a dedicated server process group; using process-only tracking for PID \(processID)"
+        )
+        return nil
     }
 
     private func terminateTrackedServer(force: Bool) {
@@ -299,9 +355,17 @@ class ServerManager {
         return errno == EPERM
     }
 
+    private func isProcessActive(_ processID: pid_t) -> Bool {
+        if kill(processID, 0) == 0 {
+            return true
+        }
+
+        return errno == EPERM
+    }
+
     private func persistServerMetadata(
         processID: pid_t,
-        processGroupID: pid_t,
+        processGroupID: pid_t?,
         pythonURL: URL,
         logDirectory: URL
     ) throws {
@@ -340,45 +404,90 @@ class ServerManager {
             return
         }
 
-        let ownedProcesses = try ownedProcessesForCurrentMetadata(metadata)
+        let ownedProcesses = try await ownedProcessesForCurrentMetadata(metadata)
         guard !ownedProcesses.isEmpty else {
             clearServerMetadata()
             return
         }
 
+        let trackingDescription = metadata.processGroupID.map { "PGID \($0)" } ?? "PID \(metadata.processID)"
         Log.server.warning(
-            "Found stale app-owned MLX server processes for PGID \(metadata.processGroupID); cleaning them up before launch"
+            "Found stale app-owned MLX server processes for \(trackingDescription); cleaning them up before launch"
         )
 
-        _ = killpg(metadata.processGroupID, SIGTERM)
-        let deadline = Date().addingTimeInterval(2.0)
-        while isProcessGroupActive(metadata.processGroupID) && Date() < deadline {
-            try? await Task.sleep(nanoseconds: 100_000_000)
-        }
-
-        if isProcessGroupActive(metadata.processGroupID) {
-            Log.server.warning("Stale server group \(metadata.processGroupID) ignored SIGTERM, sending SIGKILL")
-            _ = killpg(metadata.processGroupID, SIGKILL)
-            let forceKillDeadline = Date().addingTimeInterval(1.0)
-            while isProcessGroupActive(metadata.processGroupID) && Date() < forceKillDeadline {
+        if let processGroupID = metadata.processGroupID {
+            _ = killpg(processGroupID, SIGTERM)
+            let deadline = Date().addingTimeInterval(2.0)
+            while isProcessGroupActive(processGroupID) && Date() < deadline {
                 try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+
+            if isProcessGroupActive(processGroupID) {
+                Log.server.warning("Stale server group \(processGroupID) ignored SIGTERM, sending SIGKILL")
+                _ = killpg(processGroupID, SIGKILL)
+                let forceKillDeadline = Date().addingTimeInterval(1.0)
+                while isProcessGroupActive(processGroupID) && Date() < forceKillDeadline {
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                }
+            }
+        } else {
+            for ownedProcess in ownedProcesses {
+                _ = kill(ownedProcess.processID, SIGTERM)
+            }
+
+            let deadline = Date().addingTimeInterval(2.0)
+            while ownedProcesses.contains(where: { isProcessActive($0.processID) }) && Date() < deadline {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+
+            let remainingProcesses = ownedProcesses.filter { isProcessActive($0.processID) }
+            if !remainingProcesses.isEmpty {
+                Log.server.warning("Stale server processes ignored SIGTERM, sending SIGKILL")
+                for ownedProcess in remainingProcesses {
+                    _ = kill(ownedProcess.processID, SIGKILL)
+                }
+
+                let forceKillDeadline = Date().addingTimeInterval(1.0)
+                while remainingProcesses.contains(where: { isProcessActive($0.processID) }) && Date() < forceKillDeadline {
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                }
             }
         }
 
         clearServerMetadata()
     }
 
-    private func ownedProcessesForCurrentMetadata(_ metadata: OwnedServerMetadata) throws -> [ProcessSnapshot] {
-        try listProcesses().filter { snapshot in
-            snapshot.processGroupID == metadata.processGroupID &&
-            snapshot.command.contains(metadata.pythonPath) &&
-            snapshot.command.contains("mlx_audio.server") &&
-            snapshot.command.contains(metadata.logDirectory) &&
-            snapshot.command.contains("--port \(metadata.port)")
+    private func ownedProcessesForCurrentMetadata(_ metadata: OwnedServerMetadata) async throws -> [ProcessSnapshot] {
+        try await listProcesses().filter { snapshot in
+            let commandMatches =
+                snapshot.command.contains(metadata.pythonPath) &&
+                snapshot.command.contains("mlx_audio.server") &&
+                snapshot.command.contains(metadata.logDirectory) &&
+                snapshot.command.contains("--port \(metadata.port)")
+
+            guard commandMatches else { return false }
+
+            if let processGroupID = metadata.processGroupID {
+                return snapshot.processGroupID == processGroupID
+            }
+
+            return snapshot.processID == metadata.processID
         }
     }
 
-    private func listProcesses() throws -> [ProcessSnapshot] {
+    private func listProcesses() async throws -> [ProcessSnapshot] {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                do {
+                    continuation.resume(returning: try self.listProcessesSynchronously())
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    private func listProcessesSynchronously() throws -> [ProcessSnapshot] {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/ps")
         process.arguments = ["-axo", "pid=,pgid=,command="]
@@ -388,13 +497,13 @@ class ServerManager {
         process.standardError = Pipe()
 
         try process.run()
+        let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
 
         guard process.terminationStatus == 0 else {
-            throw ServerError.failedToStart("Unable to inspect running processes for stale server cleanup.")
+            throw ServerError.failedToStart("Unable to inspect running processes for stale server cleanup.", nil)
         }
 
-        let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
         let output = String(decoding: data, as: UTF8.self)
         return output
             .split(separator: "\n")
@@ -407,8 +516,9 @@ class ServerManager {
                 guard let self else { return }
                 if await self.checkHealth() == false {
                     await MainActor.run {
-                        Log.server.warning("Health check failed")
-                        self.isRunning = false
+                        self.handleUnexpectedExit(
+                            "Server stopped responding on \(Constants.Server.host):\(Constants.Server.port)."
+                        )
                     }
                 }
             }
@@ -422,15 +532,113 @@ class ServerManager {
     
     /// Check if server is responding to health endpoint
     func checkHealth() async -> Bool {
-        do {
-            let (_, response) = try await URLSession.shared.data(from: Constants.Server.healthURL)
-            if let httpResponse = response as? HTTPURLResponse {
-                return httpResponse.statusCode == 200
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                continuation.resume(returning: self.canConnectToServerPort())
             }
-        } catch {
-            // Server not responding
         }
+    }
+
+    private func handleUnexpectedExit(_ reason: String) {
+        guard !isStopping else { return }
+        guard isRunning || process != nil || processGroupID != nil else { return }
+
+        stopHealthMonitoring()
+        Log.server.warning(reason)
+        cleanup()
+
+        unexpectedExitHandler?(reason)
+    }
+
+    private func canConnectToServerPort() -> Bool {
+        var hints = addrinfo(
+            ai_flags: AI_ADDRCONFIG,
+            ai_family: AF_UNSPEC,
+            ai_socktype: SOCK_STREAM,
+            ai_protocol: IPPROTO_TCP,
+            ai_addrlen: 0,
+            ai_canonname: nil,
+            ai_addr: nil,
+            ai_next: nil
+        )
+
+        var info: UnsafeMutablePointer<addrinfo>?
+        let status = getaddrinfo(Constants.Server.host, String(Constants.Server.port), &hints, &info)
+        guard status == 0, let firstInfo = info else {
+            return false
+        }
+        defer { freeaddrinfo(firstInfo) }
+
+        var currentInfo: UnsafeMutablePointer<addrinfo>? = firstInfo
+        while let addressInfo = currentInfo {
+            let socketDescriptor = socket(
+                addressInfo.pointee.ai_family,
+                addressInfo.pointee.ai_socktype,
+                addressInfo.pointee.ai_protocol
+            )
+
+            if socketDescriptor >= 0 {
+                defer { close(socketDescriptor) }
+
+                var timeout = timeval(tv_sec: 1, tv_usec: 0)
+                setsockopt(
+                    socketDescriptor,
+                    SOL_SOCKET,
+                    SO_SNDTIMEO,
+                    &timeout,
+                    socklen_t(MemoryLayout<timeval>.size)
+                )
+                setsockopt(
+                    socketDescriptor,
+                    SOL_SOCKET,
+                    SO_RCVTIMEO,
+                    &timeout,
+                    socklen_t(MemoryLayout<timeval>.size)
+                )
+
+                if connect(socketDescriptor, addressInfo.pointee.ai_addr, addressInfo.pointee.ai_addrlen) == 0 {
+                    return true
+                }
+            }
+
+            currentInfo = addressInfo.pointee.ai_next
+        }
+
         return false
+    }
+
+    private func validateModelStartup(modelIdentifier: String, pythonURL: URL) async throws {
+        let command = """
+        import sys, traceback
+        from mlx_audio.utils import load_model
+
+        model_id = sys.argv[1]
+        try:
+            load_model(model_id)
+            print(f"Model validation succeeded for {model_id}")
+        except Exception:
+            traceback.print_exc()
+            raise
+        """
+
+        do {
+            try await ShellCommandRunner.run(
+                executableURL: pythonURL,
+                arguments: ["-c", command, modelIdentifier],
+                currentDirectory: Constants.supportDirectory,
+                environment: ServerEnvironment.build(model: modelIdentifier)
+            ) { output in
+                Log.server.info(output)
+            }
+        } catch let error as ShellCommandError {
+            let details = error.commandOutput
+            let userFacingMessage = Constants.Models
+                .startupValidationMessage(for: Constants.Models.model(withIdentifier: modelIdentifier) ?? Constants.Models.defaultModel,
+                                          rawError: details)
+            throw ServerError.failedToStart(userFacingMessage, details)
+        } catch {
+            throw ServerError.failedToStart("Failed to validate \(modelIdentifier) before startup.", error.localizedDescription)
+        }
     }
 
     // MARK: - Model Management
@@ -490,7 +698,7 @@ extension ServerManager: ServerManaging {}
 
 private struct OwnedServerMetadata: Codable {
     let processID: Int32
-    let processGroupID: Int32
+    let processGroupID: Int32?
     let host: String
     let port: Int
     let pythonPath: String
@@ -525,10 +733,19 @@ private struct ProcessSnapshot {
 enum ServerError: LocalizedError {
     case alreadyRunning
     case setupRequired
-    case failedToStart(String)
+    case failedToStart(String, String?)
     case startupTimeout
     case healthCheckFailed
     case invalidModelIdentifier
+
+    var diagnosticDetails: String? {
+        switch self {
+        case .failedToStart(_, let details):
+            return details
+        default:
+            return nil
+        }
+    }
     
     var errorDescription: String? {
         switch self {
@@ -536,7 +753,7 @@ enum ServerError: LocalizedError {
             return "Server is already running"
         case .setupRequired:
             return "Speech runtime unavailable. Reinstall the app or restore the development runtime before continuing."
-        case .failedToStart(let reason):
+        case .failedToStart(let reason, _):
             return "Failed to start server: \(reason)"
         case .startupTimeout:
             return "Server did not start within timeout period"

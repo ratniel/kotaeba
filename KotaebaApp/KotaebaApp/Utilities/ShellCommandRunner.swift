@@ -30,6 +30,9 @@ enum ShellCommandRunner {
 
             let handleOutput: (Data) -> Void = { data in
                 guard let output = String(data: data, encoding: .utf8), !output.isEmpty else { return }
+                outputQueue.sync {
+                    outputState.capturedOutput.append(output)
+                }
                 let lines = output.split(whereSeparator: \.isNewline).map(String.init)
                 outputQueue.sync {
                     for line in lines {
@@ -61,12 +64,20 @@ enum ShellCommandRunner {
             process.terminationHandler = { process in
                 outputPipe.fileHandleForReading.readabilityHandler = nil
                 errorPipe.fileHandleForReading.readabilityHandler = nil
+                handleOutput(outputPipe.fileHandleForReading.readDataToEndOfFile())
+                handleError(errorPipe.fileHandleForReading.readDataToEndOfFile())
 
                 if process.terminationStatus == 0 {
                     continuation.resume()
                 } else {
                     let message = outputQueue.sync {
-                        outputState.capturedError.isEmpty ? "Unknown error" : outputState.capturedError
+                        if !outputState.capturedError.isEmpty {
+                            return outputState.capturedError
+                        }
+                        if !outputState.capturedOutput.isEmpty {
+                            return outputState.capturedOutput
+                        }
+                        return "Unknown error"
                     }
                     continuation.resume(throwing: ShellCommandError.commandFailed(message, process.terminationStatus))
                 }
@@ -82,11 +93,19 @@ enum ShellCommandRunner {
 }
 
 private final class CommandOutputState: @unchecked Sendable {
+    nonisolated(unsafe) var capturedOutput = ""
     nonisolated(unsafe) var capturedError = ""
 }
 
 enum ShellCommandError: LocalizedError {
     case commandFailed(String, Int32)
+
+    var commandOutput: String {
+        switch self {
+        case .commandFailed(let message, _):
+            return message
+        }
+    }
 
     var errorDescription: String? {
         switch self {

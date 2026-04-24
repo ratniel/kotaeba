@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Settings and preferences window
@@ -49,6 +50,7 @@ struct SettingsView: View {
 // MARK: - General Settings
 
 struct GeneralSettingsView: View {
+    @EnvironmentObject var stateManager: AppStateManager
     @Binding var autoStartServer: Bool
     @Binding var launchAtLogin: Bool
     @Binding var serverHost: String
@@ -119,6 +121,66 @@ struct GeneralSettingsView: View {
             }
 
             Section {
+                PermissionSettingsRow(
+                    icon: "hand.tap.fill",
+                    title: "Accessibility",
+                    description: "Required for the global hotkey and inserting text into other apps.",
+                    isGranted: stateManager.permissionStatus.accessibility,
+                    buttonTitle: stateManager.permissionStatus.accessibility ? "Open Settings" : "Grant Access",
+                    action: {
+                        if stateManager.permissionStatus.accessibility {
+                            PermissionManager.openAccessibilitySettings()
+                        } else {
+                            stateManager.requestAccessibilityPermission()
+                        }
+                    }
+                )
+
+                PermissionSettingsRow(
+                    icon: "mic.fill",
+                    title: "Microphone",
+                    description: "Required to capture audio for transcription.",
+                    isGranted: stateManager.permissionStatus.microphone,
+                    buttonTitle: stateManager.permissionStatus.microphone ? "Open Settings" : "Grant Access",
+                    action: {
+                        Task {
+                            if stateManager.permissionStatus.microphone {
+                                PermissionManager.openMicrophoneSettings()
+                            } else {
+                                _ = await PermissionManager.requestMicrophonePermissionOrOpenSettings()
+                                stateManager.refreshPermissionStatus(source: "settingsMicrophoneGrant")
+                            }
+                        }
+                    }
+                )
+
+                HStack {
+                    Button("Recheck Permissions") {
+                        stateManager.recheckPermissionsAndHotkey()
+                    }
+
+                    if !stateManager.permissionStatus.allGranted {
+                        Button("Reveal Running App") {
+                            PermissionManager.revealRunningAppInFinder()
+                        }
+                    }
+                }
+
+                if !stateManager.permissionStatus.allGranted {
+                    Text("Grant access to the exact app build currently running, then come back and recheck.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    Text(PermissionManager.runningAppPath)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .textSelection(.enabled)
+                }
+            } header: {
+                Text("Permissions")
+            }
+
+            Section {
                 Toggle("Show test tools in sidebar", isOn: $showDiagnosticsUI)
 
                 Text("Keeps the Test App screen available so you can verify permissions, insertion, and runtime behavior from the installed app.")
@@ -133,6 +195,7 @@ struct GeneralSettingsView: View {
         .onAppear {
             hasStoredToken = KeychainSecretStore.string(for: Constants.SecureSettingsKeys.huggingFaceToken) != nil
             syncServerPortText()
+            stateManager.refreshPermissionStatus(source: "settingsAppear")
         }
         .onChange(of: serverPortText) { _, newValue in
             updateServerPortText(newValue)
@@ -209,10 +272,55 @@ struct GeneralSettingsView: View {
     }
 }
 
+private struct PermissionSettingsRow: View {
+    let icon: String
+    let title: String
+    let description: String
+    let isGranted: Bool
+    let buttonTitle: String
+    let action: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .foregroundStyle(isGranted ? Constants.UI.successGreen : Constants.UI.accentOrange)
+                .frame(width: 20)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(title)
+                        .font(.headline)
+
+                    Text(isGranted ? "Granted" : "Needs Access")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background((isGranted ? Constants.UI.successGreen : Constants.UI.accentOrange).opacity(0.15))
+                        .clipShape(.rect(cornerRadius: 999))
+                }
+
+                Text(description)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 16)
+
+            Button(buttonTitle, action: action)
+        }
+    }
+}
+
 // MARK: - Hotkey Settings
 
 struct HotkeySettingsView: View {
     @EnvironmentObject var stateManager: AppStateManager
+    @State private var isCapturingShortcut = false
+    @State private var shortcutMessage: String?
+    @State private var shortcutMessageIsWarning = false
+    @State private var shortcutEventMonitor: Any?
+    @State private var showsShortcutHelp = false
     
     var body: some View {
         Form {
@@ -220,23 +328,66 @@ struct HotkeySettingsView: View {
                 HStack {
                     Text("Current Hotkey")
                     Spacer()
-                    Text(Constants.Hotkey.defaultDisplayString)
+                    Text(stateManager.currentHotkey.displayString)
                         .font(.system(.body, design: .monospaced))
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
                         .background(Color.secondary.opacity(0.2))
-                        .cornerRadius(6)
+                        .clipShape(.rect(cornerRadius: 6))
                 }
-                
-                Text("Customizable hotkeys coming in future update")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+
+                HStack(spacing: 8) {
+                    Button(isCapturingShortcut ? "Press Shortcut..." : "Change...") {
+                        beginShortcutCapture()
+                    }
+                    .disabled(isCapturingShortcut)
+
+                    Button("Reset") {
+                        saveShortcut(.default)
+                    }
+                    .disabled(stateManager.currentHotkey == .default)
+
+                    Button {
+                        showsShortcutHelp.toggle()
+                    } label: {
+                        Image(systemName: "info.circle")
+                    }
+                    .buttonStyle(.borderless)
+                    .help(HotkeyShortcutRules.avoidanceHelpText)
+                    .popover(isPresented: $showsShortcutHelp, arrowEdge: .trailing) {
+                        ShortcutAvoidancePopover()
+                    }
+
+                    if isCapturingShortcut {
+                        Button("Cancel") {
+                            cancelShortcutCapture(message: nil)
+                        }
+                    }
+                }
+
+                if isCapturingShortcut {
+                    Text("Press the new shortcut, or Esc to cancel.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if let shortcutMessage {
+                    Text(shortcutMessage)
+                        .font(.caption)
+                        .foregroundStyle(shortcutMessageIsWarning ? Constants.UI.accentOrange : Color.secondary)
+                }
             } header: {
                 Text("Hotkey Configuration")
             }
             
             Section {
                 RecordingModeView(showsHeader: false)
+
+                if let prompt = stateManager.recordingModePromptMessage {
+                    RecordingModePromptView(message: prompt) {
+                        stateManager.clearRecordingModePrompt()
+                    }
+                }
                 
                 Text(stateManager.recordingMode.description)
                     .font(.caption)
@@ -247,6 +398,86 @@ struct HotkeySettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
+        .onDisappear {
+            stopShortcutCapture()
+        }
+    }
+
+    private func beginShortcutCapture() {
+        shortcutMessage = nil
+        shortcutMessageIsWarning = false
+        isCapturingShortcut = true
+        stopShortcutCapture()
+
+        shortcutEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            handleShortcutEvent(event)
+            return nil
+        }
+    }
+
+    private func handleShortcutEvent(_ event: NSEvent) {
+        if event.keyCode == Constants.Hotkey.escapeKeyCode {
+            cancelShortcutCapture(message: nil)
+            return
+        }
+
+        let shortcut = HotkeyShortcut(
+            keyCode: event.keyCode,
+            modifiers: HotkeyModifiers(modifierFlags: event.modifierFlags)
+        )
+
+        switch HotkeyShortcutRules.validation(for: shortcut) {
+        case .valid(let caution):
+            saveShortcut(shortcut, caution: caution)
+        case .invalid(let message):
+            shortcutMessage = message
+            shortcutMessageIsWarning = true
+        }
+    }
+
+    private func saveShortcut(_ shortcut: HotkeyShortcut, caution: String? = nil) {
+        stopShortcutCapture()
+        isCapturingShortcut = false
+        stateManager.setHotkeyShortcut(shortcut)
+        shortcutMessage = caution ?? "Hotkey set to \(shortcut.displayString)."
+        shortcutMessageIsWarning = caution != nil
+    }
+
+    private func cancelShortcutCapture(message: String?) {
+        stopShortcutCapture()
+        isCapturingShortcut = false
+        shortcutMessage = message
+        shortcutMessageIsWarning = false
+    }
+
+    private func stopShortcutCapture() {
+        if let shortcutEventMonitor {
+            NSEvent.removeMonitor(shortcutEventMonitor)
+            self.shortcutEventMonitor = nil
+        }
+    }
+}
+
+private struct ShortcutAvoidancePopover: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Shortcuts to Avoid")
+                .font(.headline)
+
+            ForEach(HotkeyShortcutRules.avoidanceSuggestions) { suggestion in
+                HStack {
+                    Text(suggestion.shortcut.displayString)
+                        .font(.system(.caption, design: .monospaced))
+                        .frame(width: 58, alignment: .leading)
+
+                    Text(suggestion.reason)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(14)
+        .frame(width: 220)
     }
 }
 

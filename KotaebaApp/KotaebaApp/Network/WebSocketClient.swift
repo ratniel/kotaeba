@@ -2,10 +2,10 @@ import Foundation
 
 /// Delegate protocol for WebSocket events
 protocol WebSocketClientDelegate: AnyObject {
-    func webSocketDidConnect()
-    func webSocketDidDisconnect(error: Error?)
-    func webSocketDidReceiveTranscription(_ transcription: ServerTranscription)
-    func webSocketDidReceiveStatus(_ status: ServerStatus)
+    func webSocketDidConnect(_ client: WebSocketClient)
+    func webSocketDidDisconnect(_ client: WebSocketClient, error: Error?)
+    func webSocketDidReceiveTranscription(_ client: WebSocketClient, transcription: ServerTranscription)
+    func webSocketDidReceiveStatus(_ client: WebSocketClient, status: ServerStatus)
 }
 
 /// WebSocket client for communicating with mlx_audio.server
@@ -24,6 +24,7 @@ class WebSocketClient: NSObject {
     private var session: URLSession!
     private let serverURL: URL
     private var isConnected = false
+    private var hasReportedDisconnect = false
     
     // MARK: - Initialization
     
@@ -46,6 +47,7 @@ class WebSocketClient: NSObject {
             return
         }
         
+        hasReportedDisconnect = false
         Log.websocket.info("Connecting to \(serverURL)...")
         webSocketTask = session.webSocketTask(with: serverURL)
         webSocketTask?.resume()
@@ -56,9 +58,13 @@ class WebSocketClient: NSObject {
     
     /// Disconnect from the WebSocket server
     func disconnect() {
-        webSocketTask?.cancel(with: .goingAway, reason: nil)
+        hasReportedDisconnect = true
+        let task = webSocketTask
         webSocketTask = nil
         isConnected = false
+        delegate = nil
+        task?.cancel(with: .goingAway, reason: nil)
+        session.invalidateAndCancel()
     }
     
     // MARK: - Sending
@@ -112,8 +118,12 @@ class WebSocketClient: NSObject {
                 self?.receiveMessage()
                 
             case .failure(let error):
-                Log.websocket.error("Receive error: \(error)")
-                self?.delegate?.webSocketDidDisconnect(error: error)
+                if self?.hasReportedDisconnect == true {
+                    Log.websocket.debug("Receive ended after requested disconnect: \(error.localizedDescription)")
+                } else {
+                    Log.websocket.error("Receive error: \(error)")
+                }
+                self?.reportDisconnect(error: error)
             }
         }
     }
@@ -127,11 +137,16 @@ class WebSocketClient: NSObject {
             switch serverMessage {
             case .transcription(let transcription):
                 Log.websocket.debug("Parsed transcription: \"\(transcription.text)\" (partial: \(transcription.isPartial))")
-                delegate?.webSocketDidReceiveTranscription(transcription)
+                delegate?.webSocketDidReceiveTranscription(self, transcription: transcription)
                 
             case .status(let status):
                 Log.websocket.info("Status: \(status.status) - \(status.message)")
-                delegate?.webSocketDidReceiveStatus(status)
+                delegate?.webSocketDidReceiveStatus(self, status: status)
+
+            case .error(let error):
+                Log.websocket.error("Server error: \(error.error)")
+                reportDisconnect(error: WebSocketClientError.server(error.error))
+                webSocketTask?.cancel(with: .internalServerError, reason: error.error.data(using: .utf8))
                 
             case .unknown(let raw):
                 Log.websocket.warning("Unknown message format: \(raw.prefix(100))...")
@@ -144,6 +159,24 @@ class WebSocketClient: NSObject {
             Log.websocket.warning("Unknown message type")
         }
     }
+
+    private func reportDisconnect(error: Error?) {
+        guard !hasReportedDisconnect else { return }
+        hasReportedDisconnect = true
+        isConnected = false
+        delegate?.webSocketDidDisconnect(self, error: error)
+    }
+}
+
+private enum WebSocketClientError: LocalizedError {
+    case server(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .server(let message):
+            return message
+        }
+    }
 }
 
 // MARK: - URLSessionWebSocketDelegate
@@ -153,20 +186,23 @@ extension WebSocketClient: URLSessionWebSocketDelegate {
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
         Log.websocket.info("Connected")
         isConnected = true
-        delegate?.webSocketDidConnect()
+        delegate?.webSocketDidConnect(self)
     }
     
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
         let reasonString = reason.flatMap { String(data: $0, encoding: .utf8) } ?? "none"
         Log.websocket.info("Disconnected with code: \(closeCode.rawValue), reason: \(reasonString)")
-        isConnected = false
-        delegate?.webSocketDidDisconnect(error: nil)
+        reportDisconnect(error: nil)
     }
     
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         if let error = error {
-            Log.websocket.error("Task completed with error: \(error)")
-            delegate?.webSocketDidDisconnect(error: error)
+            if hasReportedDisconnect {
+                Log.websocket.debug("Task completed after requested disconnect: \(error.localizedDescription)")
+            } else {
+                Log.websocket.error("Task completed with error: \(error)")
+            }
+            reportDisconnect(error: error)
         }
     }
 }

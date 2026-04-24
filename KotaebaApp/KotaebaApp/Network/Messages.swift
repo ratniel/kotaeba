@@ -82,12 +82,18 @@ struct ServerStatus: Codable {
     let progress: Double?
 }
 
+/// Error message returned by the server before it closes the WebSocket
+struct ServerErrorMessage: Codable {
+    let error: String
+}
+
 // MARK: - Message Parsing
 
 /// Unified enum for all server messages
 enum ServerMessage {
     case transcription(ServerTranscription)
     case status(ServerStatus)
+    case error(ServerErrorMessage)
     case unknown(String)
     
     /// Parse a JSON string into a ServerMessage
@@ -100,6 +106,11 @@ enum ServerMessage {
         // Try parsing as transcription first (has "text" field)
         if let transcription = try? JSONDecoder().decode(ServerTranscription.self, from: data) {
             self = .transcription(transcription)
+            return
+        }
+
+        if let error = try? JSONDecoder().decode(ServerErrorMessage.self, from: data) {
+            self = .error(error)
             return
         }
         
