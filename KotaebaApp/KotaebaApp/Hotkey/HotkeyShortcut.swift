@@ -31,9 +31,16 @@ enum HotkeyShortcutStore {
             return .default
         }
 
+        let rawKeyCode = keyCodeValue.int64Value
+        let rawModifiers = modifiersValue.int64Value
+        guard (0...Int64(UInt16.max)).contains(rawKeyCode),
+              (0...Int64(UInt32.max)).contains(rawModifiers) else {
+            return .default
+        }
+
         let shortcut = HotkeyShortcut(
-            keyCode: UInt16(truncating: keyCodeValue),
-            modifiers: HotkeyModifiers(rawValue: modifiersValue.uint32Value).knownModifiers
+            keyCode: UInt16(rawKeyCode),
+            modifiers: HotkeyModifiers(rawValue: UInt32(rawModifiers)).knownModifiers
         )
 
         switch HotkeyShortcutRules.validation(for: shortcut) {

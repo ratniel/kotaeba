@@ -38,6 +38,18 @@ final class HotkeyShortcutTests: XCTestCase {
         XCTAssertEqual(HotkeyShortcutStore.load(defaults: defaults), .default)
     }
 
+    func testOutOfRangeStoredShortcutFallsBackToDefault() {
+        defaults.set(Int64(UInt16.max) + 1, forKey: Constants.UserDefaultsKeys.hotkeyKeyCode)
+        defaults.set(Int(HotkeyModifiers.control.rawValue), forKey: Constants.UserDefaultsKeys.hotkeyModifiers)
+
+        XCTAssertEqual(HotkeyShortcutStore.load(defaults: defaults), .default)
+
+        defaults.set(7, forKey: Constants.UserDefaultsKeys.hotkeyKeyCode)
+        defaults.set(-1, forKey: Constants.UserDefaultsKeys.hotkeyModifiers)
+
+        XCTAssertEqual(HotkeyShortcutStore.load(defaults: defaults), .default)
+    }
+
     func testValidationRejectsMissingTriggerModifier() {
         let noModifier = HotkeyShortcut(keyCode: 7, modifiers: [])
         let shiftOnly = HotkeyShortcut(keyCode: 7, modifiers: .shift)

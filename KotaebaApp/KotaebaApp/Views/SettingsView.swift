@@ -320,6 +320,7 @@ struct HotkeySettingsView: View {
     @State private var shortcutMessage: String?
     @State private var shortcutMessageIsWarning = false
     @State private var shortcutEventMonitor: Any?
+    @State private var shouldRestoreHotkeyAfterCapture = false
     @State private var showsShortcutHelp = false
     
     var body: some View {
@@ -398,21 +399,36 @@ struct HotkeySettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            if isCapturingShortcut {
+                cancelShortcutCapture(message: nil)
+            }
+        }
         .onDisappear {
-            stopShortcutCapture()
+            cancelShortcutCapture(message: nil)
         }
     }
 
     private func beginShortcutCapture() {
+        if isCapturingShortcut {
+            finishShortcutCapture(restoreHotkey: true)
+        }
+
         shortcutMessage = nil
         shortcutMessageIsWarning = false
+        shouldRestoreHotkeyAfterCapture = stateManager.suspendHotkeyForShortcutCapture()
         isCapturingShortcut = true
-        stopShortcutCapture()
 
-        shortcutEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+        guard let monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { event in
             handleShortcutEvent(event)
             return nil
+        }) else {
+            finishShortcutCapture(restoreHotkey: true)
+            shortcutMessage = "Could not start shortcut capture."
+            shortcutMessageIsWarning = true
+            return
         }
+        shortcutEventMonitor = monitor
     }
 
     private func handleShortcutEvent(_ event: NSEvent) {
@@ -436,21 +452,33 @@ struct HotkeySettingsView: View {
     }
 
     private func saveShortcut(_ shortcut: HotkeyShortcut, caution: String? = nil) {
-        stopShortcutCapture()
+        removeShortcutEventMonitor()
         isCapturingShortcut = false
+        let shouldRestoreHotkey = shouldRestoreHotkeyAfterCapture
+        shouldRestoreHotkeyAfterCapture = false
         stateManager.setHotkeyShortcut(shortcut)
+        stateManager.resumeHotkeyAfterShortcutCapture(shouldRestore: shouldRestoreHotkey)
         shortcutMessage = caution ?? "Hotkey set to \(shortcut.displayString)."
         shortcutMessageIsWarning = caution != nil
     }
 
     private func cancelShortcutCapture(message: String?) {
-        stopShortcutCapture()
-        isCapturingShortcut = false
+        finishShortcutCapture(restoreHotkey: true)
         shortcutMessage = message
         shortcutMessageIsWarning = false
     }
 
-    private func stopShortcutCapture() {
+    private func finishShortcutCapture(restoreHotkey: Bool) {
+        removeShortcutEventMonitor()
+        isCapturingShortcut = false
+        let shouldRestoreHotkey = shouldRestoreHotkeyAfterCapture
+        shouldRestoreHotkeyAfterCapture = false
+        if restoreHotkey {
+            stateManager.resumeHotkeyAfterShortcutCapture(shouldRestore: shouldRestoreHotkey)
+        }
+    }
+
+    private func removeShortcutEventMonitor() {
         if let shortcutEventMonitor {
             NSEvent.removeMonitor(shortcutEventMonitor)
             self.shortcutEventMonitor = nil

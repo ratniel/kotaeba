@@ -219,6 +219,23 @@ class AppStateManager: ObservableObject {
         _ = initializeHotkey(promptIfMissing: false)
     }
 
+    @discardableResult
+    func suspendHotkeyForShortcutCapture() -> Bool {
+        let shouldRestore = isHotkeyActive
+        guard shouldRestore else { return false }
+
+        hotkeyManager?.stop()
+        isHotkeyActive = false
+        hotkeyStatusMessage = "Hotkey capture in progress"
+        return true
+    }
+
+    func resumeHotkeyAfterShortcutCapture(shouldRestore: Bool) {
+        guard shouldRestore else { return }
+
+        _ = initializeHotkey(promptIfMissing: false)
+    }
+
     func recheckPermissionsAndHotkey(attempts: Int = 3, interval: TimeInterval = 0.35) {
         permissionRefreshTask?.cancel()
         permissionRefreshTask = Task { @MainActor [weak self] in
