@@ -24,6 +24,7 @@ class WebSocketClient: NSObject {
     private var session: URLSession!
     private let serverURL: URL
     private var isConnected = false
+    private var didRequestDisconnect = false
     private var hasReportedDisconnect = false
     
     // MARK: - Initialization
@@ -46,7 +47,7 @@ class WebSocketClient: NSObject {
             Log.websocket.debug("Already connected or connecting")
             return
         }
-        
+        didRequestDisconnect = false
         hasReportedDisconnect = false
         Log.websocket.info("Connecting to \(serverURL)...")
         webSocketTask = session.webSocketTask(with: serverURL)
@@ -58,6 +59,7 @@ class WebSocketClient: NSObject {
     
     /// Disconnect from the WebSocket server
     func disconnect() {
+        didRequestDisconnect = true
         hasReportedDisconnect = true
         let task = webSocketTask
         webSocketTask = nil
@@ -118,11 +120,12 @@ class WebSocketClient: NSObject {
                 self?.receiveMessage()
                 
             case .failure(let error):
-                if self?.hasReportedDisconnect == true {
+                if self?.didRequestDisconnect == true || self?.hasReportedDisconnect == true {
                     Log.websocket.debug("Receive ended after requested disconnect: \(error.localizedDescription)")
-                } else {
-                    Log.websocket.error("Receive error: \(error)")
+                    return
                 }
+
+                Log.websocket.error("Receive error: \(error)")
                 self?.reportDisconnect(error: error)
             }
         }
@@ -192,16 +195,21 @@ extension WebSocketClient: URLSessionWebSocketDelegate {
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
         let reasonString = reason.flatMap { String(data: $0, encoding: .utf8) } ?? "none"
         Log.websocket.info("Disconnected with code: \(closeCode.rawValue), reason: \(reasonString)")
+        if didRequestDisconnect || hasReportedDisconnect {
+            return
+        }
+
         reportDisconnect(error: nil)
     }
     
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         if let error = error {
-            if hasReportedDisconnect {
+            if didRequestDisconnect || hasReportedDisconnect {
                 Log.websocket.debug("Task completed after requested disconnect: \(error.localizedDescription)")
-            } else {
-                Log.websocket.error("Task completed with error: \(error)")
+                return
             }
+
+            Log.websocket.error("Task completed with error: \(error)")
             reportDisconnect(error: error)
         }
     }

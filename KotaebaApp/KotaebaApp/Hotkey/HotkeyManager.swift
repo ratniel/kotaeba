@@ -138,7 +138,6 @@ class HotkeyManager {
 
     private func processorInput(for type: CGEventType, event: CGEvent) -> HotkeyProcessorInput {
         let timestamp = TimeInterval(event.timestamp) / 1_000_000_000
-
         switch type {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
             return .tapDisabled(timestamp: timestamp)

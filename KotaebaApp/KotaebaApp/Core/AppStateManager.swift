@@ -408,12 +408,10 @@ class AppStateManager: ObservableObject {
 
         pendingWebSocketDisconnectTask = Task { [weak self, weak client] in
             try? await Task.sleep(nanoseconds: 1_200_000_000)
-            await MainActor.run {
-                guard let self, let client, self.webSocketClient === client else { return }
-                self.webSocketClient?.disconnect()
-                self.webSocketClient = nil
-                self.pendingWebSocketDisconnectTask = nil
-            }
+            guard let self, let client, self.webSocketClient === client else { return }
+            self.webSocketClient?.disconnect()
+            self.webSocketClient = nil
+            self.pendingWebSocketDisconnectTask = nil
         }
     }
     
@@ -681,7 +679,10 @@ class AppStateManager: ObservableObject {
         pendingWebSocketDisconnectTask?.cancel()
         pendingWebSocketDisconnectTask = nil
         stopRecording()
+        pendingWebSocketDisconnectTask?.cancel()
+        pendingWebSocketDisconnectTask = nil
         webSocketClient?.disconnect()
+        webSocketClient = nil
         audioCapture?.stopRecording()
         await serverManager?.stopAndWait(timeout: 2.0)
         hotkeyManager?.stop()
