@@ -309,7 +309,9 @@ class AudioCaptureManager: AudioCapturing {
     }
 
     @objc private func audioDevicesDidChange() {
-        handleAudioDevicesDidChange(defaultInputChanged: false)
+        DispatchQueue.main.async { [weak self] in
+            self?.handleAudioDevicesDidChange(defaultInputChanged: false)
+        }
     }
 
     private func handleAudioDevicesDidChange(defaultInputChanged: Bool) {
@@ -469,7 +471,7 @@ class AudioCaptureManager: AudioCapturing {
         )
 
         guard status == noErr else { return nil }
-        return uid?.takeUnretainedValue() as String?
+        return uid?.takeRetainedValue() as String?
     }
 }
 

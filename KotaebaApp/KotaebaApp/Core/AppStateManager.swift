@@ -419,7 +419,7 @@ class AppStateManager: ObservableObject {
     }
 
     private func stopAudioCapture() {
-        stopAudioCapture()
+        audioCapture?.stopRecording()
         activeAudioSessionID = nil
         audioAmplitude = 0.0
     }
