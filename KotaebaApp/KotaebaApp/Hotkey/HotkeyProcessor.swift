@@ -151,8 +151,11 @@ struct HotkeyProcessor {
         case .holdRecording, .doubleTapRecording:
             state = .dirtyWaitingForRelease
             return HotkeyProcessorResult(actions: [.cancelRecording, .reenableEventTap], shouldConsumeEvent: false)
-        case .lockedRecording, .lockedStopKeyPressed:
+        case .lockedRecording:
             state = .idle
+            return HotkeyProcessorResult(actions: [.cancelRecording, .reenableEventTap], shouldConsumeEvent: false)
+        case .lockedStopKeyPressed:
+            state = .dirtyWaitingForRelease
             return HotkeyProcessorResult(actions: [.cancelRecording, .reenableEventTap], shouldConsumeEvent: false)
         case .awaitingSecondTap:
             state = .idle
@@ -176,7 +179,7 @@ struct HotkeyProcessor {
                 state = .lockedRecording
                 return .passThrough
             case .lockedStopKeyPressed:
-                state = .idle
+                state = .dirtyWaitingForRelease
                 return HotkeyProcessorResult(actions: [.stopRecording], shouldConsumeEvent: false)
             case .toggleKeyPressed:
                 state = .idle
@@ -330,7 +333,7 @@ struct HotkeyProcessor {
             endedAt: endedAt,
             shouldConsumeEvent: shouldConsumeEvent
         )
-        state = result.actions == [.cancelRecording]
+        state = result.actions.contains(.cancelRecording)
             ? .awaitingSecondTap(firstTapEndedAt: endedAt)
             : .idle
         return result

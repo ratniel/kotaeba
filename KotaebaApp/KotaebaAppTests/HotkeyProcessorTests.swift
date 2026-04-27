@@ -356,6 +356,55 @@ final class HotkeyProcessorTests: XCTestCase {
         XCTAssertEqual(processor.state, .idle)
     }
 
+    func testTapDisabledWhileLockedStopKeyPressedWaitsForRelease() {
+        var processor = makeLockedHoldProcessor()
+        _ = processor.handle(
+            .keyDown(keyCode: xKeyCode, modifiers: .control, timestamp: 2.0),
+            recordingMode: .hold
+        )
+
+        let disabled = processor.handle(.tapDisabled(timestamp: 2.05), recordingMode: .hold)
+
+        XCTAssertEqual(disabled.actions, [.cancelRecording, .reenableEventTap])
+        XCTAssertFalse(disabled.shouldConsumeEvent)
+        XCTAssertEqual(processor.state, .dirtyWaitingForRelease)
+
+        let release = processor.handle(
+            .keyUp(keyCode: xKeyCode, modifiers: .control, timestamp: 2.1),
+            recordingMode: .hold
+        )
+
+        XCTAssertEqual(release.actions, [])
+        XCTAssertTrue(release.shouldConsumeEvent)
+        XCTAssertEqual(processor.state, .idle)
+    }
+
+    func testModifierReleaseWhileLockedStopKeyPressedWaitsForKeyRelease() {
+        var processor = makeLockedHoldProcessor()
+        _ = processor.handle(
+            .keyDown(keyCode: xKeyCode, modifiers: .control, timestamp: 2.0),
+            recordingMode: .hold
+        )
+
+        let modifierRelease = processor.handle(
+            .modifiersChanged(modifiers: [], timestamp: 2.05),
+            recordingMode: .hold
+        )
+
+        XCTAssertEqual(modifierRelease.actions, [.stopRecording])
+        XCTAssertFalse(modifierRelease.shouldConsumeEvent)
+        XCTAssertEqual(processor.state, .dirtyWaitingForRelease)
+
+        let keyRelease = processor.handle(
+            .keyUp(keyCode: xKeyCode, modifiers: [], timestamp: 2.1),
+            recordingMode: .hold
+        )
+
+        XCTAssertEqual(keyRelease.actions, [])
+        XCTAssertTrue(keyRelease.shouldConsumeEvent)
+        XCTAssertEqual(processor.state, .idle)
+    }
+
     func testResetClearsPendingDoubleTapAndLockedRecordingState() {
         var pendingProcessor = makeProcessor()
         _ = pendingProcessor.handle(
