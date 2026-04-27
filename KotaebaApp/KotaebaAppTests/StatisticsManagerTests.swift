@@ -62,4 +62,48 @@ final class StatisticsManagerTests: XCTestCase {
         XCTAssertEqual(manager.getAggregatedStats(), .empty)
         XCTAssertEqual(manager.getTodayStats(currentDate: now), .empty)
     }
+
+    func testRecordSessionPersistsHistoryMetadata() {
+        let now = Date()
+
+        manager.recordSession(
+            wordCount: 2,
+            duration: 4,
+            text: "hello world",
+            language: "en",
+            modelIdentifier: "mlx-community/parakeet-tdt-0.6b-v2",
+            insertionMethod: TextInsertionMethod.accessibility.rawValue,
+            insertionError: nil,
+            sourceAppName: "Notes",
+            now: now
+        )
+
+        let session = manager.getRecentSessions(limit: 1).first
+        XCTAssertEqual(session?.transcribedText, "hello world")
+        XCTAssertEqual(session?.modelIdentifier, "mlx-community/parakeet-tdt-0.6b-v2")
+        XCTAssertEqual(session?.insertionMethod, TextInsertionMethod.accessibility.rawValue)
+        XCTAssertNil(session?.insertionError)
+        XCTAssertEqual(session?.sourceAppName, "Notes")
+    }
+
+    func testRecordSessionPersistsInsertionErrorSeparatelyFromTranscript() {
+        let now = Date()
+
+        manager.recordSession(
+            wordCount: 2,
+            duration: 4,
+            text: "hello world",
+            language: "en",
+            modelIdentifier: "model-id",
+            insertionMethod: nil,
+            insertionError: TextInsertionError.accessibilityPermissionDenied.localizedDescription,
+            sourceAppName: "Terminal",
+            now: now
+        )
+
+        let session = manager.getRecentSessions(limit: 1).first
+        XCTAssertEqual(session?.transcribedText, "hello world")
+        XCTAssertNil(session?.insertionMethod)
+        XCTAssertEqual(session?.insertionError, TextInsertionError.accessibilityPermissionDenied.localizedDescription)
+    }
 }

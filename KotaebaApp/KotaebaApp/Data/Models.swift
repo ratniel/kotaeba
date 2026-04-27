@@ -27,6 +27,18 @@ final class TranscriptionSession {
     
     /// Language used for transcription
     var language: String
+
+    /// Model identifier used for this transcription, when known
+    var modelIdentifier: String?
+
+    /// Text insertion method that handled the final transcript, when known
+    var insertionMethod: String?
+
+    /// Text insertion error if transcription succeeded but insertion failed
+    var insertionError: String?
+
+    /// Frontmost app name captured for the transcription target, when available
+    var sourceAppName: String?
     
     init(
         id: UUID = UUID(),
@@ -35,7 +47,11 @@ final class TranscriptionSession {
         wordCount: Int = 0,
         duration: TimeInterval = 0,
         transcribedText: String? = nil,
-        language: String = "en"
+        language: String = "en",
+        modelIdentifier: String? = nil,
+        insertionMethod: String? = nil,
+        insertionError: String? = nil,
+        sourceAppName: String? = nil
     ) {
         self.id = id
         self.startTime = startTime
@@ -44,6 +60,10 @@ final class TranscriptionSession {
         self.duration = duration
         self.transcribedText = transcribedText
         self.language = language
+        self.modelIdentifier = modelIdentifier
+        self.insertionMethod = insertionMethod
+        self.insertionError = insertionError
+        self.sourceAppName = sourceAppName
     }
 }
 

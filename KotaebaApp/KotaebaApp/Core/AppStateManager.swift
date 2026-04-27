@@ -68,6 +68,7 @@ class AppStateManager: ObservableObject {
                 : nil
         )
     }
+    @Published private(set) var recentTranscriptionSessions: [TranscriptionSession] = []
     @Published private(set) var audioInputDevices: [AudioInputDevice] = [.systemDefault]
     @Published private(set) var selectedAudioInputDeviceID = AudioInputDevice.systemDefaultID
     
@@ -80,6 +81,7 @@ class AppStateManager: ObservableObject {
     private var textInserter: TextInserter?
     private let statisticsManager: any StatisticsManaging
     private let webSocketClientFactory: @MainActor (URL) -> any WebSocketClienting
+    private let sourceAppNameProvider: @MainActor () -> String?
     private let huggingFaceModelInfoProvider: (String, String?) async throws -> HuggingFaceModelInfo
     private let huggingFaceTokenProvider: @MainActor () -> String?
     private var permissionRefreshTask: Task<Void, Never>?
@@ -90,12 +92,20 @@ class AppStateManager: ObservableObject {
     
     private var sessionStartTime: Date?
     private var sessionWordCount: Int = 0
+    private var sessionTranscriptChunks: [String] = []
+    private var sessionLanguage: String = "en"
+    private var sessionModelIdentifier: String?
+    private var sessionInsertionMethod: String?
+    private var sessionInsertionError: String?
+    private var sessionSourceAppName: String?
+    private var pendingSessionCompletedAt: Date?
     
     // MARK: - Initialization
 
     private init() {
         self.statisticsManager = StatisticsManager.shared
         self.webSocketClientFactory = { WebSocketClient(serverURL: $0) }
+        self.sourceAppNameProvider = { NSWorkspace.shared.frontmostApplication?.localizedName }
         self.huggingFaceModelInfoProvider = HuggingFaceModelLookup.fetchModelInfo
         self.huggingFaceTokenProvider = {
             KeychainSecretStore.string(for: Constants.SecureSettingsKeys.huggingFaceToken)
@@ -118,6 +128,9 @@ class AppStateManager: ObservableObject {
         textInserter: TextInserter? = nil,
         statisticsManager: (any StatisticsManaging)? = nil,
         webSocketClientFactory: @MainActor @escaping (URL) -> any WebSocketClienting = { WebSocketClient(serverURL: $0) },
+        sourceAppNameProvider: @MainActor @escaping () -> String? = {
+            NSWorkspace.shared.frontmostApplication?.localizedName
+        },
         huggingFaceModelInfoProvider: @escaping (String, String?) async throws -> HuggingFaceModelInfo = HuggingFaceModelLookup.fetchModelInfo,
         huggingFaceTokenProvider: @MainActor @escaping () -> String? = {
             KeychainSecretStore.string(for: Constants.SecureSettingsKeys.huggingFaceToken)
@@ -126,6 +139,7 @@ class AppStateManager: ObservableObject {
     ) {
         self.statisticsManager = statisticsManager ?? StatisticsManager.shared
         self.webSocketClientFactory = webSocketClientFactory
+        self.sourceAppNameProvider = sourceAppNameProvider
         self.huggingFaceModelInfoProvider = huggingFaceModelInfoProvider
         self.huggingFaceTokenProvider = huggingFaceTokenProvider
         self.serverManager = serverManager
@@ -198,11 +212,10 @@ class AppStateManager: ObservableObject {
     }
 
     private func handleUnexpectedServerExit(reason: String) {
-        pendingWebSocketDisconnectTask?.cancel()
-        pendingWebSocketDisconnectTask = nil
+        cancelPendingWebSocketDisconnect()
         stopAudioCapture()
-        webSocketClient?.disconnect()
-        webSocketClient = nil
+        disconnectCurrentWebSocket()
+        resetRecordingSession(clearCompletedTranscription: true)
         state = .error(reason)
     }
     
@@ -369,12 +382,12 @@ class AppStateManager: ObservableObject {
     }
     
     func stopServer() {
-        pendingWebSocketDisconnectTask?.cancel()
-        pendingWebSocketDisconnectTask = nil
+        cancelPendingWebSocketDisconnect()
         clearRecordingModePrompt()
-        webSocketClient?.disconnect()
-        webSocketClient = nil
         stopAudioCapture()
+        finalizePendingRecordingSessionIfNeeded()
+        disconnectCurrentWebSocket()
+        resetRecordingSession(clearCompletedTranscription: true)
         serverManager?.stop()
         serverStartupStage = nil
         state = .idle
@@ -390,17 +403,24 @@ class AppStateManager: ObservableObject {
             return
         }
 
-        pendingWebSocketDisconnectTask?.cancel()
-        pendingWebSocketDisconnectTask = nil
+        cancelPendingWebSocketDisconnect()
         clearRecordingModePrompt()
-        webSocketClient?.disconnect()
-        webSocketClient = nil
+        finalizePendingRecordingSessionIfNeeded()
+        stopAudioCapture()
+        disconnectCurrentWebSocket()
         
         state = .connecting
         currentTranscription = ""
         lastCompletedTranscription = nil
         sessionWordCount = 0
         sessionStartTime = Date()
+        sessionTranscriptChunks = []
+        sessionLanguage = "en"
+        sessionModelIdentifier = selectedModel.identifier
+        sessionInsertionMethod = nil
+        sessionInsertionError = nil
+        sessionSourceAppName = nil
+        pendingSessionCompletedAt = nil
         
         // Connect WebSocket
         let client = webSocketClientFactory(Constants.Server.websocketURL)
@@ -413,27 +433,16 @@ class AppStateManager: ObservableObject {
         Log.app.info("stopRecording requested (state: \(state), mode: \(recordingMode))")
         guard state == .recording || state == .connecting else { return }
         
-        // Stop audio first
+        // Stop audio first so no new buffers are sent during final-transcript grace.
         stopAudioCapture()
 
-        scheduleWebSocketDisconnectAfterFinalTranscriptGrace()
-        
-        // Save session statistics
-        if let startTime = sessionStartTime {
-            let completedAt = Date()
-            let duration = completedAt.timeIntervalSince(startTime)
-            let snapshot = statisticsManager.recordSession(
-                wordCount: sessionWordCount,
-                duration: duration,
-                text: nil,
-                language: "en",
-                now: completedAt
-            )
-            applyStatistics(snapshot)
+        pendingSessionCompletedAt = Date()
+        if webSocketClient != nil {
+            scheduleWebSocketDisconnectAfterFinalTranscriptGrace()
+        } else {
+            finalizePendingRecordingSessionIfNeeded()
         }
-        
-        // Reset
-        sessionStartTime = nil
+
         currentTranscription = ""
         audioAmplitude = 0.0
         
@@ -445,20 +454,19 @@ class AppStateManager: ObservableObject {
         Log.app.info("cancelRecording requested (state: \(state), mode: \(recordingMode))")
         guard state == .recording || state == .connecting else { return }
 
-        pendingWebSocketDisconnectTask?.cancel()
-        pendingWebSocketDisconnectTask = nil
+        cancelPendingWebSocketDisconnect()
         stopAudioCapture()
-        webSocketClient?.disconnect()
-        webSocketClient = nil
+        disconnectCurrentWebSocket()
 
-        sessionStartTime = nil
-        sessionWordCount = 0
-        currentTranscription = ""
-        lastCompletedTranscription = nil
-        audioAmplitude = 0.0
+        resetRecordingSession(clearCompletedTranscription: true)
 
         state = .serverRunning
         Log.app.info("Recording cancelled")
+    }
+
+    private func cancelPendingWebSocketDisconnect() {
+        pendingWebSocketDisconnectTask?.cancel()
+        pendingWebSocketDisconnectTask = nil
     }
 
     private func stopAudioCapture() {
@@ -467,22 +475,82 @@ class AppStateManager: ObservableObject {
         audioAmplitude = 0.0
     }
 
-    private func scheduleWebSocketDisconnectAfterFinalTranscriptGrace() {
-        pendingWebSocketDisconnectTask?.cancel()
-        guard let client = webSocketClient else { return }
+    private func disconnectCurrentWebSocket() {
+        webSocketClient?.disconnect()
+        webSocketClient = nil
+    }
 
-        pendingWebSocketDisconnectTask = Task { [weak self, weak client] in
-            try? await Task.sleep(nanoseconds: 1_200_000_000)
-            guard let self, let client, self.isCurrentWebSocketClient(client) else { return }
-            self.webSocketClient?.disconnect()
-            self.webSocketClient = nil
-            self.pendingWebSocketDisconnectTask = nil
+    private func resetRecordingSession(clearCompletedTranscription: Bool) {
+        sessionStartTime = nil
+        sessionWordCount = 0
+        sessionTranscriptChunks = []
+        sessionLanguage = "en"
+        sessionModelIdentifier = nil
+        sessionInsertionMethod = nil
+        sessionInsertionError = nil
+        sessionSourceAppName = nil
+        pendingSessionCompletedAt = nil
+        currentTranscription = ""
+        audioAmplitude = 0.0
+        activeAudioSessionID = nil
+        if clearCompletedTranscription {
+            lastCompletedTranscription = nil
         }
     }
 
     private func isCurrentWebSocketClient(_ client: any WebSocketClienting) -> Bool {
         guard let webSocketClient else { return false }
         return client === webSocketClient
+    }
+
+    private func scheduleWebSocketDisconnectAfterFinalTranscriptGrace() {
+        cancelPendingWebSocketDisconnect()
+        guard let client = webSocketClient else { return }
+
+        pendingWebSocketDisconnectTask = Task { [weak self, weak client] in
+            do {
+                try await Task.sleep(nanoseconds: 1_200_000_000)
+            } catch {
+                return
+            }
+            await MainActor.run {
+                guard let self, let client, self.isCurrentWebSocketClient(client) else { return }
+                self.finalizePendingRecordingSessionIfNeeded()
+                self.disconnectCurrentWebSocket()
+                self.pendingWebSocketDisconnectTask = nil
+            }
+        }
+    }
+
+    private func finalizePendingRecordingSessionIfNeeded() {
+        guard let startTime = sessionStartTime, let completedAt = pendingSessionCompletedAt else { return }
+
+        let duration = max(0, completedAt.timeIntervalSince(startTime))
+        let transcript = combinedSessionTranscript()
+        let snapshot = statisticsManager.recordSession(
+            wordCount: sessionWordCount,
+            duration: duration,
+            text: transcript,
+            language: sessionLanguage,
+            modelIdentifier: sessionModelIdentifier,
+            insertionMethod: sessionInsertionMethod,
+            insertionError: sessionInsertionError,
+            sourceAppName: sessionSourceAppName,
+            now: completedAt
+        )
+        applyStatistics(snapshot)
+        resetRecordingSession(clearCompletedTranscription: false)
+    }
+
+    private func combinedSessionTranscript() -> String? {
+        let text = sessionTranscriptChunks
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
+    }
+
+    private func currentSourceAppName() -> String? {
+        sourceAppNameProvider()
     }
     
     func toggleRecording() {
@@ -498,14 +566,21 @@ class AppStateManager: ObservableObject {
         applyStatistics(statisticsManager.refreshSnapshot(currentDate: currentDate))
     }
 
+    func clearTranscriptionHistory(currentDate: Date = Date()) {
+        applyStatistics(statisticsManager.clearAllData(currentDate: currentDate))
+    }
+
     private func applyStatistics(_ snapshot: StatisticsSnapshot) {
         aggregatedStats = snapshot.total
         todayStats = snapshot.today
+        recentTranscriptionSessions = statisticsManager.getRecentSessions(limit: 20)
     }
     
     // MARK: - Transcription Handling
     
-    private func handleTranscription(_ text: String, isPartial: Bool) {
+    private func handleTranscription(_ transcription: ServerTranscription) {
+        let text = transcription.text
+        let isPartial = transcription.isPartial
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedText.isEmpty else {
             Log.app.warning("Received empty transcription, ignoring")
@@ -521,21 +596,30 @@ class AppStateManager: ObservableObject {
         // The server sends transcription after each speech pause (via VAD)
         if !isPartial {
             lastCompletedTranscription = trimmedText
+            sessionTranscriptChunks.append(trimmedText)
+            if let language = transcription.language, !language.isEmpty {
+                sessionLanguage = language
+            }
 
             // Count words
-            let wordCount = trimmedText.split(separator: " ").count
+            let wordCount = trimmedText.split(whereSeparator: { $0.isWhitespace }).count
             sessionWordCount += wordCount
 
             logInsertionAttempt(wordCount: wordCount, textLength: trimmedText.count)
-            
+
+            captureSessionSourceAppAtInsertionTime()
+
             // Insert text at cursor
             if let inserter = textInserter {
                 let insertionText = sanitizeForInsertion(trimmedText) + " "
-                performInsertion(text: insertionText, inserter: inserter)
+                let result = performInsertion(text: insertionText, inserter: inserter)
+                recordSessionInsertionResult(result)
             } else {
                 Log.textInsertion.error("TextInserter is nil. Cannot insert text.")
                 lastInsertionError = "Text inserter not initialized."
                 lastInsertionMethod = nil
+                sessionInsertionMethod = nil
+                sessionInsertionError = lastInsertionError
             }
         } else {
             Log.app.debug("Partial transcription received, waiting for final...")
@@ -550,10 +634,10 @@ class AppStateManager: ObservableObject {
             lastInsertionMethod = nil
             return
         }
-        performInsertion(text: sanitizeForInsertion(text), inserter: inserter)
+        _ = performInsertion(text: sanitizeForInsertion(text), inserter: inserter)
     }
 
-    private func performInsertion(text: String, inserter: TextInserter) {
+    private func performInsertion(text: String, inserter: TextInserter) -> TextInsertionResult {
         let result = inserter.insertText(text)
         switch result {
         case .success(let method):
@@ -565,6 +649,29 @@ class AppStateManager: ObservableObject {
             lastInsertionMethod = nil
             Log.textInsertion.error("Text insertion failed: \(error.localizedDescription)")
         }
+        return result
+    }
+
+    private func recordSessionInsertionResult(_ result: TextInsertionResult) {
+        switch result {
+        case .success(let method):
+            if sessionInsertionError == nil {
+                sessionInsertionMethod = method.rawValue
+            }
+        case .failure(let error):
+            sessionInsertionMethod = nil
+            if sessionInsertionError == nil {
+                sessionInsertionError = error.localizedDescription
+            }
+        }
+    }
+
+    private func captureSessionSourceAppAtInsertionTime() {
+        guard let sourceAppName = currentSourceAppName()?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !sourceAppName.isEmpty else {
+            return
+        }
+        sessionSourceAppName = sourceAppName
     }
 
     private func sanitizeForInsertion(_ text: String) -> String {
@@ -880,8 +987,7 @@ class AppStateManager: ObservableObject {
     
     func shutdown() {
         permissionRefreshTask?.cancel()
-        pendingWebSocketDisconnectTask?.cancel()
-        pendingWebSocketDisconnectTask = nil
+        cancelPendingWebSocketDisconnect()
         stopRecording()
         stopServer()
         hotkeyManager?.stop()
@@ -891,13 +997,10 @@ class AppStateManager: ObservableObject {
     /// Best-effort cleanup before app termination to avoid leaving server processes running.
     func shutdownForTermination() async {
         permissionRefreshTask?.cancel()
-        pendingWebSocketDisconnectTask?.cancel()
-        pendingWebSocketDisconnectTask = nil
+        cancelPendingWebSocketDisconnect()
         stopRecording()
-        pendingWebSocketDisconnectTask?.cancel()
-        pendingWebSocketDisconnectTask = nil
-        webSocketClient?.disconnect()
-        webSocketClient = nil
+        cancelPendingWebSocketDisconnect()
+        disconnectCurrentWebSocket()
         stopAudioCapture()
         await serverManager?.stopAndWait(timeout: 2.0)
         hotkeyManager?.stop()
@@ -907,6 +1010,17 @@ class AppStateManager: ObservableObject {
 }
 
 // MARK: - WebSocketClientDelegate
+
+private enum AppLifecycleError: LocalizedError {
+    case audioCaptureUnavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .audioCaptureUnavailable:
+            return "Audio capture is unavailable."
+        }
+    }
+}
 
 extension AppStateManager: WebSocketClientDelegate {
     
@@ -925,14 +1039,17 @@ extension AppStateManager: WebSocketClientDelegate {
 
             // Start audio capture
             do {
-                activeAudioSessionID = try audioCapture?.startRecording()
+                guard let audioCapture else {
+                    throw AppLifecycleError.audioCaptureUnavailable
+                }
+                activeAudioSessionID = try audioCapture.startRecording()
                 state = .recording
             } catch {
                 Log.audio.error("Failed to start audio: \(error)")
+                activeAudioSessionID = nil
                 state = .error(error.localizedDescription)
                 if isCurrentWebSocketClient(client) {
-                    webSocketClient?.disconnect()
-                    webSocketClient = nil
+                    disconnectCurrentWebSocket()
                 }
             }
         }
@@ -945,8 +1062,13 @@ extension AppStateManager: WebSocketClientDelegate {
                 return
             }
             Log.websocket.info("webSocketDidDisconnect received (state: \(state), error: \(error?.localizedDescription ?? "none"))")
+            let hadPendingStoppedSession = pendingSessionCompletedAt != nil
+            cancelPendingWebSocketDisconnect()
             stopAudioCapture()
             webSocketClient = nil
+            if hadPendingStoppedSession {
+                finalizePendingRecordingSessionIfNeeded()
+            }
             if state == .recording || state == .connecting {
                 if let error = error {
                     Log.websocket.error("WebSocket disconnected with error: \(error)")
@@ -965,7 +1087,7 @@ extension AppStateManager: WebSocketClientDelegate {
                 Log.websocket.debug("Ignoring transcription from stale WebSocket client")
                 return
             }
-            handleTranscription(transcription.text, isPartial: transcription.isPartial)
+            handleTranscription(transcription)
         }
     }
     
@@ -1009,7 +1131,7 @@ extension AppStateManager: AudioCaptureDelegate {
             }
             Log.audio.error("Audio capture failed: \(error)")
             stopAudioCapture()
-            webSocketClient?.disconnect()
+            disconnectCurrentWebSocket()
 
             if recoverFromAudioRouteChangeIfNeeded(error) {
                 return
@@ -1032,13 +1154,8 @@ extension AppStateManager: AudioCaptureDelegate {
             return false
         }
 
-        pendingWebSocketDisconnectTask?.cancel()
-        pendingWebSocketDisconnectTask = nil
-        sessionStartTime = nil
-        sessionWordCount = 0
-        currentTranscription = ""
-        audioAmplitude = 0.0
-        lastCompletedTranscription = nil
+        cancelPendingWebSocketDisconnect()
+        resetRecordingSession(clearCompletedTranscription: true)
         refreshAudioInputDevices()
         recordingModePromptMessage = promptMessage
         lastDiagnosticErrorDetails = nil
