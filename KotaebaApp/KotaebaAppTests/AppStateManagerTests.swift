@@ -172,6 +172,8 @@ private final class MockServerManager: ServerManaging {
         return true
     }
 
+    func validateModelCompatibility(_ modelIdentifier: String) async throws {}
+
     func downloadModel(_ modelIdentifier: String, progressHandler: ((Double) -> Void)?) async throws {
         progressHandler?(1.0)
     }
