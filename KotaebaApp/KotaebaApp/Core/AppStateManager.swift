@@ -43,17 +43,20 @@ class AppStateManager: ObservableObject {
     @Published private(set) var serverStartupStage: ServerStartupStage?
     @Published private(set) var aggregatedStats: AggregatedStats = .empty
     @Published private(set) var todayStats: AggregatedStats = .empty
+    @Published private(set) var audioInputDevices: [AudioInputDevice] = [.systemDefault]
+    @Published private(set) var selectedAudioInputDeviceID = AudioInputDevice.systemDefaultID
     
     // MARK: - Components
     
     private var serverManager: ServerManaging?
-    private var audioCapture: AudioCaptureManager?
+    private var audioCapture: (any AudioCapturing)?
     private var webSocketClient: WebSocketClient?
     private var hotkeyManager: HotkeyManager?
     private var textInserter: TextInserter?
     private let statisticsManager: any StatisticsManaging
     private var permissionRefreshTask: Task<Void, Never>?
     private var pendingWebSocketDisconnectTask: Task<Void, Never>?
+    private var activeAudioSessionID: AudioCaptureSessionID?
     
     // MARK: - Session Tracking
     
@@ -78,7 +81,7 @@ class AppStateManager: ObservableObject {
 
     init(
         serverManager: ServerManaging,
-        audioCapture: AudioCaptureManager? = nil,
+        audioCapture: (any AudioCapturing)? = nil,
         textInserter: TextInserter? = nil,
         statisticsManager: (any StatisticsManaging)? = nil,
         shouldAutoStartServer: Bool = false
@@ -91,6 +94,8 @@ class AppStateManager: ObservableObject {
         refreshStatistics()
         self.audioCapture?.delegate = self
         configureServerCallbacks()
+        configureAudioCallbacks()
+        refreshAudioInputDevices()
 
         if shouldAutoStartServer && !Constants.isRunningTests {
             Task {
@@ -103,7 +108,8 @@ class AppStateManager: ObservableObject {
         UserDefaults.standard.register(defaults: [
             Constants.UserDefaultsKeys.safeModeEnabled: true,
             Constants.UserDefaultsKeys.serverHost: Constants.Server.defaultHost,
-            Constants.UserDefaultsKeys.serverPort: Constants.Server.defaultPort
+            Constants.UserDefaultsKeys.serverPort: Constants.Server.defaultPort,
+            Constants.UserDefaultsKeys.selectedAudioDevice: AudioInputDevice.systemDefaultID
         ])
         SettingsMigration.migrateIfNeeded()
         currentHotkey = HotkeyShortcutStore.load()
@@ -131,6 +137,8 @@ class AppStateManager: ObservableObject {
         // Set up delegates
         audioCapture?.delegate = self
         configureServerCallbacks()
+        configureAudioCallbacks()
+        refreshAudioInputDevices()
     }
 
     private func configureServerCallbacks() {
@@ -139,10 +147,18 @@ class AppStateManager: ObservableObject {
         }
     }
 
+    private func configureAudioCallbacks() {
+        audioCapture?.inputDevicesDidChange = { [weak self] in
+            Task { @MainActor in
+                self?.refreshAudioInputDevices()
+            }
+        }
+    }
+
     private func handleUnexpectedServerExit(reason: String) {
         pendingWebSocketDisconnectTask?.cancel()
         pendingWebSocketDisconnectTask = nil
-        audioCapture?.stopRecording()
+        stopAudioCapture()
         webSocketClient?.disconnect()
         webSocketClient = nil
         state = .error(reason)
@@ -316,7 +332,7 @@ class AppStateManager: ObservableObject {
         clearRecordingModePrompt()
         webSocketClient?.disconnect()
         webSocketClient = nil
-        audioCapture?.stopRecording()
+        stopAudioCapture()
         serverManager?.stop()
         serverStartupStage = nil
         state = .idle
@@ -355,7 +371,7 @@ class AppStateManager: ObservableObject {
         guard state == .recording || state == .connecting else { return }
         
         // Stop audio first
-        audioCapture?.stopRecording()
+        stopAudioCapture()
 
         scheduleWebSocketDisconnectAfterFinalTranscriptGrace()
         
@@ -388,7 +404,7 @@ class AppStateManager: ObservableObject {
 
         pendingWebSocketDisconnectTask?.cancel()
         pendingWebSocketDisconnectTask = nil
-        audioCapture?.stopRecording()
+        stopAudioCapture()
         webSocketClient?.disconnect()
         webSocketClient = nil
 
@@ -400,6 +416,12 @@ class AppStateManager: ObservableObject {
 
         state = .serverRunning
         Log.app.info("Recording cancelled")
+    }
+
+    private func stopAudioCapture() {
+        stopAudioCapture()
+        activeAudioSessionID = nil
+        audioAmplitude = 0.0
     }
 
     private func scheduleWebSocketDisconnectAfterFinalTranscriptGrace() {
@@ -613,6 +635,34 @@ class AppStateManager: ObservableObject {
         }
     }
 
+    // MARK: - Audio Input Selection
+
+    func refreshAudioInputDevices() {
+        selectedAudioInputDeviceID = audioCapture?.selectedInputDeviceID() ?? AudioInputDevice.systemDefaultID
+        audioInputDevices = audioCapture?.refreshAvailableInputDevices() ?? [.systemDefault]
+    }
+
+    func setSelectedAudioInputDeviceID(_ deviceID: String) {
+        let normalizedID = AudioInputDeviceSelection.normalizedSelectionID(deviceID)
+        guard normalizedID != selectedAudioInputDeviceID else { return }
+
+        let wasRecording = state == .recording || state == .connecting
+        if wasRecording {
+            stopRecording()
+        } else {
+            clearRecordingModePrompt()
+        }
+
+        audioCapture?.setSelectedInputDeviceID(normalizedID)
+        selectedAudioInputDeviceID = normalizedID
+        refreshAudioInputDevices()
+
+        if wasRecording {
+            recordingModePromptMessage = "Recording stopped. Press \(currentHotkey.displayString) to start again with the selected microphone."
+            Log.app.info("Microphone changed while active; stopped recording before switching input")
+        }
+    }
+
     // MARK: - Preferences
 
     func setRecordingMode(_ mode: RecordingMode) {
@@ -686,7 +736,7 @@ class AppStateManager: ObservableObject {
         pendingWebSocketDisconnectTask = nil
         webSocketClient?.disconnect()
         webSocketClient = nil
-        audioCapture?.stopRecording()
+        stopAudioCapture()
         await serverManager?.stopAndWait(timeout: 2.0)
         hotkeyManager?.stop()
         isHotkeyActive = false
@@ -713,7 +763,7 @@ extension AppStateManager: WebSocketClientDelegate {
 
             // Start audio capture
             do {
-                try audioCapture?.startRecording()
+                activeAudioSessionID = try audioCapture?.startRecording()
                 state = .recording
             } catch {
                 Log.audio.error("Failed to start audio: \(error)")
@@ -731,7 +781,7 @@ extension AppStateManager: WebSocketClientDelegate {
                 return
             }
             Log.websocket.info("webSocketDidDisconnect received (state: \(state), error: \(error?.localizedDescription ?? "none"))")
-            audioCapture?.stopRecording()
+            stopAudioCapture()
             webSocketClient = nil
             if state == .recording || state == .connecting {
                 if let error = error {
@@ -770,24 +820,66 @@ extension AppStateManager: WebSocketClientDelegate {
 
 extension AppStateManager: AudioCaptureDelegate {
     
-    nonisolated func audioCaptureDidReceiveBuffer(_ buffer: Data) {
+    nonisolated func audioCaptureDidReceiveBuffer(_ buffer: Data, sessionID: AudioCaptureSessionID) {
         Task { @MainActor in
+            guard state == .recording, activeAudioSessionID == sessionID else {
+                Log.audio.debug("Ignoring audio buffer from stale capture session")
+                return
+            }
             webSocketClient?.sendAudioData(buffer)
         }
     }
     
-    nonisolated func audioCaptureDidUpdateAmplitude(_ amplitude: Float) {
+    nonisolated func audioCaptureDidUpdateAmplitude(_ amplitude: Float, sessionID: AudioCaptureSessionID) {
         Task { @MainActor in
+            guard state == .recording, activeAudioSessionID == sessionID else { return }
             audioAmplitude = amplitude
         }
     }
     
-    nonisolated func audioCaptureDidFail(error: Error) {
+    nonisolated func audioCaptureDidFail(error: Error, sessionID: AudioCaptureSessionID) {
         Task { @MainActor in
+            guard activeAudioSessionID == sessionID else {
+                Log.audio.debug("Ignoring error from stale capture session: \(error.localizedDescription)")
+                return
+            }
             Log.audio.error("Audio capture failed: \(error)")
-            state = .error(error.localizedDescription)
+            stopAudioCapture()
             webSocketClient?.disconnect()
+
+            if recoverFromAudioRouteChangeIfNeeded(error) {
+                return
+            }
+
+            state = .error(error.localizedDescription)
         }
+    }
+
+    private func recoverFromAudioRouteChangeIfNeeded(_ error: Error) -> Bool {
+        guard let audioError = error as? AudioError else { return false }
+
+        let promptMessage: String
+        switch audioError {
+        case .selectedInputUnavailable:
+            promptMessage = "Recording stopped because the selected microphone is unavailable. Choose another microphone or reconnect it, then press \(currentHotkey.displayString) to start again."
+        case .inputDeviceChanged:
+            promptMessage = "Recording stopped because the active microphone changed. Press \(currentHotkey.displayString) to start again."
+        default:
+            return false
+        }
+
+        pendingWebSocketDisconnectTask?.cancel()
+        pendingWebSocketDisconnectTask = nil
+        sessionStartTime = nil
+        sessionWordCount = 0
+        currentTranscription = ""
+        audioAmplitude = 0.0
+        lastCompletedTranscription = nil
+        refreshAudioInputDevices()
+        recordingModePromptMessage = promptMessage
+        lastDiagnosticErrorDetails = nil
+        state = .serverRunning
+        return true
     }
 
     private func userFacingWebSocketErrorMessage(_ error: Error) -> String {

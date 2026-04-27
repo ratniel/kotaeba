@@ -290,7 +290,7 @@ enum Constants {
 
 enum SettingsMigration {
     private static let legacyLocalhostPort = 8000
-    static let currentVersion = 2
+    static let currentVersion = 3
     private static let loopbackHosts = ["localhost", "127.0.0.1"]
 
     static func migrateIfNeeded(defaults: UserDefaults = .standard) {
@@ -303,6 +303,7 @@ enum SettingsMigration {
 
         migrateLocalhostPortIfNeeded(defaults: defaults)
         migrateUnsupportedQwenIdentifierIfNeeded(defaults: defaults)
+        migrateAudioInputSelectionIfNeeded(defaults: defaults)
     }
 
     private static func migrateLocalhostPortIfNeeded(defaults: UserDefaults) {
@@ -322,6 +323,14 @@ enum SettingsMigration {
         guard Constants.Models.isQwenModelIdentifier(selectedModel) else { return }
 
         defaults.set(Constants.Models.defaultModel.identifier, forKey: Constants.UserDefaultsKeys.selectedModel)
+    }
+
+    private static func migrateAudioInputSelectionIfNeeded(defaults: UserDefaults) {
+        let selectedDeviceID = defaults.string(forKey: Constants.UserDefaultsKeys.selectedAudioDevice)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard selectedDeviceID?.isEmpty != false else { return }
+        defaults.set(AudioInputDevice.systemDefaultID, forKey: Constants.UserDefaultsKeys.selectedAudioDevice)
     }
 }
 

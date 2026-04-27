@@ -29,6 +29,11 @@ struct SettingsView: View {
                 .tabItem {
                     Label("Hotkey", systemImage: "command")
                 }
+
+            AudioSettingsView()
+                .tabItem {
+                    Label("Audio", systemImage: "mic")
+                }
             
             TranscriptionSettingsView(
                 useClipboardFallback: $useClipboardFallback,
@@ -506,6 +511,89 @@ private struct ShortcutAvoidancePopover: View {
         }
         .padding(14)
         .frame(width: 220)
+    }
+}
+
+// MARK: - Audio Settings
+
+struct AudioSettingsView: View {
+    @EnvironmentObject var stateManager: AppStateManager
+
+    private var selectedDevice: AudioInputDevice? {
+        stateManager.audioInputDevices.first { $0.id == stateManager.selectedAudioInputDeviceID }
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("Input", selection: selectedDeviceBinding) {
+                    ForEach(stateManager.audioInputDevices) { device in
+                        Text(device.settingsDisplayName)
+                            .tag(device.id)
+                    }
+                }
+
+                HStack {
+                    Button("Refresh") {
+                        stateManager.refreshAudioInputDevices()
+                        stateManager.refreshPermissionStatus(source: "audioSettingsRefresh")
+                    }
+
+                    Spacer()
+
+                    Text(selectedStatusText)
+                        .font(.caption)
+                        .foregroundStyle(selectedStatusColor)
+                }
+
+                Text("Kotaeba keeps transcription audio at 16 kHz mono PCM.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text("Microphone")
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
+        .onAppear {
+            stateManager.refreshPermissionStatus(source: "audioSettingsAppear")
+            stateManager.refreshAudioInputDevices()
+        }
+    }
+
+    private var selectedDeviceBinding: Binding<String> {
+        Binding(
+            get: { stateManager.selectedAudioInputDeviceID },
+            set: { stateManager.setSelectedAudioInputDeviceID($0) }
+        )
+    }
+
+    private var selectedStatusText: String {
+        guard stateManager.permissionStatus.microphone else {
+            return "Microphone access required"
+        }
+
+        guard let selectedDevice else {
+            return "Using System Default"
+        }
+
+        if selectedDevice.isSystemDefault {
+            return "Using System Default"
+        }
+
+        return selectedDevice.isAvailable ? "Available" : "Unavailable; falling back"
+    }
+
+    private var selectedStatusColor: Color {
+        guard stateManager.permissionStatus.microphone else {
+            return Constants.UI.accentOrange
+        }
+
+        guard let selectedDevice, !selectedDevice.isSystemDefault else {
+            return .secondary
+        }
+
+        return selectedDevice.isAvailable ? Constants.UI.successGreen : Constants.UI.accentOrange
     }
 }
 

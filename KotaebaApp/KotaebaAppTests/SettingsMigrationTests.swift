@@ -50,4 +50,24 @@ final class SettingsMigrationTests: XCTestCase {
 
         XCTAssertEqual(defaults.integer(forKey: Constants.UserDefaultsKeys.serverPort), 8000)
     }
+
+    func testMigratesMissingAudioInputSelectionToSystemDefault() {
+        defaults.set(SettingsMigration.currentVersion - 1, forKey: Constants.UserDefaultsKeys.serverPortMigrationVersion)
+
+        SettingsMigration.migrateIfNeeded(defaults: defaults)
+
+        XCTAssertEqual(
+            defaults.string(forKey: Constants.UserDefaultsKeys.selectedAudioDevice),
+            AudioInputDevice.systemDefaultID
+        )
+    }
+
+    func testDoesNotOverrideExistingAudioInputSelection() {
+        defaults.set(SettingsMigration.currentVersion - 1, forKey: Constants.UserDefaultsKeys.serverPortMigrationVersion)
+        defaults.set("usb-mic", forKey: Constants.UserDefaultsKeys.selectedAudioDevice)
+
+        SettingsMigration.migrateIfNeeded(defaults: defaults)
+
+        XCTAssertEqual(defaults.string(forKey: Constants.UserDefaultsKeys.selectedAudioDevice), "usb-mic")
+    }
 }
