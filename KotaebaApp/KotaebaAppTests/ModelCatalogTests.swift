@@ -165,6 +165,32 @@ final class ModelCatalogTests: XCTestCase {
         XCTAssertEqual(model.qualityLabel, "Validated")
     }
 
+    func testSpeechToTextValidationAllowsRelevantTagsWithoutPipelineTag() throws {
+        XCTAssertNoThrow(
+            try HuggingFaceModelLookup.validateSpeechToTextCandidate(
+                HuggingFaceModelInfo(
+                    id: "mlx-community/custom-stt-model",
+                    pipelineTag: nil,
+                    tags: ["speech-to-text", "mlx"]
+                )
+            )
+        )
+    }
+
+    func testSpeechToTextValidationRejectsMissingPipelineTagWithoutSpeechTags() {
+        XCTAssertThrowsError(
+            try HuggingFaceModelLookup.validateSpeechToTextCandidate(
+                HuggingFaceModelInfo(
+                    id: "mlx-community/not-asr-model",
+                    pipelineTag: nil,
+                    tags: ["mlx", "audio"]
+                )
+            )
+        ) { error in
+            XCTAssertEqual(error as? HuggingFaceModelLookupError, .notSpeechToTextModel("mlx-community/not-asr-model"))
+        }
+    }
+
     private func projectCatalogData() throws -> Data {
         let testFile = URL(fileURLWithPath: #filePath)
         let catalogURL = testFile

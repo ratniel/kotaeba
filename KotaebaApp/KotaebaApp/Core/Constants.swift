@@ -501,7 +501,7 @@ enum CustomModelValidationStatus: Equatable {
         case .checkingRepository:
             return "Checking Hugging Face"
         case .validatingCompatibility:
-            return "Validating model"
+            return "Validating model (may download files)"
         case .saving:
             return "Saving model"
         }

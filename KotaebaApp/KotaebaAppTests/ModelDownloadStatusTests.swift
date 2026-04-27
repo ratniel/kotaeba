@@ -41,4 +41,10 @@ final class ModelDownloadStatusTests: XCTestCase {
         XCTAssertTrue(ModelPreflightState.validatingAndStartingServer.locksModelSelection)
         XCTAssertFalse(ModelPreflightState.idle.locksModelSelection)
     }
+
+    func testCustomModelValidationStatusDisplayTextMentionsPossibleDownloads() {
+        XCTAssertEqual(CustomModelValidationStatus.checkingRepository.displayText, "Checking Hugging Face")
+        XCTAssertEqual(CustomModelValidationStatus.validatingCompatibility.displayText, "Validating model (may download files)")
+        XCTAssertEqual(CustomModelValidationStatus.saving.displayText, "Saving model")
+    }
 }

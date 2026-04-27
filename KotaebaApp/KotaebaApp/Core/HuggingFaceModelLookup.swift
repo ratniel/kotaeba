@@ -81,12 +81,10 @@ enum HuggingFaceModelLookup {
         let hasSpeechToTextTag = normalizedTags.contains("automatic-speech-recognition") ||
             normalizedTags.contains("audio-to-text") ||
             normalizedTags.contains("speech-to-text")
+        let pipelineTag = info.pipelineTag?.lowercased() ?? ""
+        let isSpeechToTextPipeline = pipelineTag == "automatic-speech-recognition"
 
-        guard let pipelineTag = info.pipelineTag?.lowercased(), !pipelineTag.isEmpty else {
-            return
-        }
-
-        guard pipelineTag == "automatic-speech-recognition" || hasSpeechToTextTag else {
+        guard isSpeechToTextPipeline || hasSpeechToTextTag else {
             throw HuggingFaceModelLookupError.notSpeechToTextModel(info.id)
         }
     }
