@@ -1,11 +1,21 @@
 import Foundation
 
 /// Delegate protocol for WebSocket events
+protocol WebSocketClienting: AnyObject {
+    var delegate: WebSocketClientDelegate? { get set }
+
+    func connect()
+    func disconnect()
+    func sendConfiguration(_ config: ClientConfig)
+    func sendAudioData(_ data: Data)
+    func sendText(_ text: String)
+}
+
 protocol WebSocketClientDelegate: AnyObject {
-    func webSocketDidConnect(_ client: WebSocketClient)
-    func webSocketDidDisconnect(_ client: WebSocketClient, error: Error?)
-    func webSocketDidReceiveTranscription(_ client: WebSocketClient, transcription: ServerTranscription)
-    func webSocketDidReceiveStatus(_ client: WebSocketClient, status: ServerStatus)
+    func webSocketDidConnect(_ client: any WebSocketClienting)
+    func webSocketDidDisconnect(_ client: any WebSocketClienting, error: Error?)
+    func webSocketDidReceiveTranscription(_ client: any WebSocketClienting, transcription: ServerTranscription)
+    func webSocketDidReceiveStatus(_ client: any WebSocketClienting, status: ServerStatus)
 }
 
 /// WebSocket client for communicating with mlx_audio.server
@@ -14,7 +24,7 @@ protocol WebSocketClientDelegate: AnyObject {
 /// - Connection management
 /// - Sending audio data and configuration
 /// - Receiving transcription results
-class WebSocketClient: NSObject {
+class WebSocketClient: NSObject, WebSocketClienting {
     
     // MARK: - Properties
     
@@ -24,7 +34,6 @@ class WebSocketClient: NSObject {
     private var session: URLSession!
     private let serverURL: URL
     private var isConnected = false
-    private var didRequestDisconnect = false
     private var hasReportedDisconnect = false
     
     // MARK: - Initialization
@@ -47,7 +56,7 @@ class WebSocketClient: NSObject {
             Log.websocket.debug("Already connected or connecting")
             return
         }
-        didRequestDisconnect = false
+        
         hasReportedDisconnect = false
         Log.websocket.info("Connecting to \(serverURL)...")
         webSocketTask = session.webSocketTask(with: serverURL)
@@ -59,7 +68,6 @@ class WebSocketClient: NSObject {
     
     /// Disconnect from the WebSocket server
     func disconnect() {
-        didRequestDisconnect = true
         hasReportedDisconnect = true
         let task = webSocketTask
         webSocketTask = nil
@@ -120,12 +128,11 @@ class WebSocketClient: NSObject {
                 self?.receiveMessage()
                 
             case .failure(let error):
-                if self?.didRequestDisconnect == true || self?.hasReportedDisconnect == true {
+                if self?.hasReportedDisconnect == true {
                     Log.websocket.debug("Receive ended after requested disconnect: \(error.localizedDescription)")
-                    return
+                } else {
+                    Log.websocket.error("Receive error: \(error)")
                 }
-
-                Log.websocket.error("Receive error: \(error)")
                 self?.reportDisconnect(error: error)
             }
         }
@@ -195,21 +202,16 @@ extension WebSocketClient: URLSessionWebSocketDelegate {
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
         let reasonString = reason.flatMap { String(data: $0, encoding: .utf8) } ?? "none"
         Log.websocket.info("Disconnected with code: \(closeCode.rawValue), reason: \(reasonString)")
-        if didRequestDisconnect || hasReportedDisconnect {
-            return
-        }
-
         reportDisconnect(error: nil)
     }
     
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         if let error = error {
-            if didRequestDisconnect || hasReportedDisconnect {
+            if hasReportedDisconnect {
                 Log.websocket.debug("Task completed after requested disconnect: \(error.localizedDescription)")
-                return
+            } else {
+                Log.websocket.error("Task completed with error: \(error)")
             }
-
-            Log.websocket.error("Task completed with error: \(error)")
             reportDisconnect(error: error)
         }
     }
