@@ -29,9 +29,10 @@ enum ShellCommandRunner {
             let outputState = CommandOutputState()
 
             let handleOutput: (Data) -> Void = { data in
-                guard let output = String(data: data, encoding: .utf8), !output.isEmpty else { return }
+                let output = String(decoding: data, as: UTF8.self)
+                guard !output.isEmpty else { return }
                 outputQueue.sync {
-                    outputState.capturedOutput.append(output)
+                    outputState.append(output, stream: .standardOutput)
                 }
                 let lines = output.split(whereSeparator: \.isNewline).map(String.init)
                 outputQueue.sync {
@@ -42,9 +43,10 @@ enum ShellCommandRunner {
             }
 
             let handleError: (Data) -> Void = { data in
-                guard let output = String(data: data, encoding: .utf8), !output.isEmpty else { return }
+                let output = String(decoding: data, as: UTF8.self)
+                guard !output.isEmpty else { return }
                 outputQueue.sync {
-                    outputState.capturedError.append(output)
+                    outputState.append(output, stream: .standardError)
                 }
                 let lines = output.split(whereSeparator: \.isNewline).map(String.init)
                 outputQueue.sync {
@@ -71,13 +73,7 @@ enum ShellCommandRunner {
                     continuation.resume()
                 } else {
                     let message = outputQueue.sync {
-                        if !outputState.capturedError.isEmpty {
-                            return outputState.capturedError
-                        }
-                        if !outputState.capturedOutput.isEmpty {
-                            return outputState.capturedOutput
-                        }
-                        return "Unknown error"
+                        outputState.diagnosticMessage
                     }
                     continuation.resume(throwing: ShellCommandError.commandFailed(message, process.terminationStatus))
                 }
@@ -92,9 +88,92 @@ enum ShellCommandRunner {
     }
 }
 
-private final class CommandOutputState: @unchecked Sendable {
-    nonisolated(unsafe) var capturedOutput = ""
-    nonisolated(unsafe) var capturedError = ""
+final class CommandOutputState: @unchecked Sendable {
+    static let elevatedCharacterLimit = 16_384
+    static let tailCharacterLimit = 8_192
+
+    nonisolated(unsafe) private(set) var capturedOutput = ""
+    nonisolated(unsafe) private(set) var capturedError = ""
+    nonisolated(unsafe) private(set) var outputTail = ""
+    nonisolated(unsafe) private(set) var errorTail = ""
+
+    nonisolated(unsafe) var diagnosticMessage: String {
+        if !capturedError.isEmpty {
+            return capturedError
+        }
+        if !capturedOutput.isEmpty {
+            return capturedOutput
+        }
+        if !errorTail.isEmpty {
+            return errorTail
+        }
+        if !outputTail.isEmpty {
+            return outputTail
+        }
+        return "Unknown error"
+    }
+
+    nonisolated(unsafe) func append(_ output: String, stream: CommandStream) {
+        appendToTail(output, stream: stream)
+
+        for line in output.split(whereSeparator: \.isNewline) {
+            let text = String(line)
+            guard shouldRetainForDiagnostics(text) else { continue }
+            appendElevated(text + "\n", stream: stream)
+        }
+    }
+
+    nonisolated(unsafe) private func appendElevated(_ text: String, stream: CommandStream) {
+        switch stream {
+        case .standardOutput:
+            capturedOutput.append(text)
+            capturedOutput = trim(capturedOutput, maxCharacters: Self.elevatedCharacterLimit)
+        case .standardError:
+            capturedError.append(text)
+            capturedError = trim(capturedError, maxCharacters: Self.elevatedCharacterLimit)
+        }
+    }
+
+    nonisolated(unsafe) private func appendToTail(_ text: String, stream: CommandStream) {
+        switch stream {
+        case .standardOutput:
+            outputTail.append(text)
+            outputTail = trim(outputTail, maxCharacters: Self.tailCharacterLimit)
+        case .standardError:
+            errorTail.append(text)
+            errorTail = trim(errorTail, maxCharacters: Self.tailCharacterLimit)
+        }
+    }
+
+    nonisolated(unsafe) private func trim(_ text: String, maxCharacters: Int) -> String {
+        guard text.count > maxCharacters else { return text }
+        return String(text.suffix(maxCharacters))
+    }
+
+    nonisolated(unsafe) private func shouldRetainForDiagnostics(_ text: String) -> Bool {
+        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalized.isEmpty else { return false }
+
+        let markers = [
+            "traceback",
+            "exception",
+            "error",
+            "warn",
+            "warning",
+            "failed",
+            "fatal",
+            "unable to",
+            "could not",
+            "unsupported",
+            "not supported"
+        ]
+        return markers.contains { normalized.contains($0) }
+    }
+}
+
+enum CommandStream {
+    case standardOutput
+    case standardError
 }
 
 enum ShellCommandError: LocalizedError {
