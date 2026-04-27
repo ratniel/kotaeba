@@ -11,6 +11,7 @@ import AppKit
 /// - Tracks statistics
 @MainActor
 class AppStateManager: ObservableObject {
+    private static let finalTranscriptGracePeriodNanoseconds: UInt64 = 1_200_000_000
     
     // MARK: - Singleton
     
@@ -507,18 +508,16 @@ class AppStateManager: ObservableObject {
         cancelPendingWebSocketDisconnect()
         guard let client = webSocketClient else { return }
 
-        pendingWebSocketDisconnectTask = Task { [weak self, weak client] in
+        pendingWebSocketDisconnectTask = Task { @MainActor [weak self, weak client] in
             do {
-                try await Task.sleep(nanoseconds: 1_200_000_000)
+                try await Task.sleep(nanoseconds: Self.finalTranscriptGracePeriodNanoseconds)
             } catch {
                 return
             }
-            await MainActor.run {
-                guard let self, let client, self.isCurrentWebSocketClient(client) else { return }
-                self.finalizePendingRecordingSessionIfNeeded()
-                self.disconnectCurrentWebSocket()
-                self.pendingWebSocketDisconnectTask = nil
-            }
+            guard let self, let client, self.isCurrentWebSocketClient(client) else { return }
+            self.finalizePendingRecordingSessionIfNeeded()
+            self.disconnectCurrentWebSocket()
+            self.pendingWebSocketDisconnectTask = nil
         }
     }
 
@@ -1000,6 +999,7 @@ class AppStateManager: ObservableObject {
         cancelPendingWebSocketDisconnect()
         stopRecording()
         cancelPendingWebSocketDisconnect()
+        finalizePendingRecordingSessionIfNeeded()
         disconnectCurrentWebSocket()
         stopAudioCapture()
         await serverManager?.stopAndWait(timeout: 2.0)
