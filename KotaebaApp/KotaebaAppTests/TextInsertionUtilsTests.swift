@@ -132,6 +132,14 @@ final class TextInsertionUtilsTests: XCTestCase {
         XCTAssertFalse(TextInserter.isPlainPasteMenuTitle("Paste Item"))
     }
 
+    func testPlainPasteMenuShortcutMatchesCommandVOnly() {
+        XCTAssertTrue(TextInserter.isPlainPasteMenuShortcut(commandCharacter: "v", modifiers: 0))
+        XCTAssertTrue(TextInserter.isPlainPasteMenuShortcut(commandCharacter: "V", modifiers: 0))
+        XCTAssertFalse(TextInserter.isPlainPasteMenuShortcut(commandCharacter: "v", modifiers: 1))
+        XCTAssertFalse(TextInserter.isPlainPasteMenuShortcut(commandCharacter: "v", modifiers: 8))
+        XCTAssertFalse(TextInserter.isPlainPasteMenuShortcut(commandCharacter: "c", modifiers: 0))
+    }
+
     func testSafeModeSanitizationPreservesTabsAndSpacesButRemovesNewlines() {
         let text = " leading\ttext\nnext line\r\nfinal "
 

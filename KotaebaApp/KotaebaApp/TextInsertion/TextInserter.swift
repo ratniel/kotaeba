@@ -337,9 +337,7 @@ class TextInserter {
     private func findPasteMenuItem(in element: AXUIElement, remainingDepth: Int) -> AXUIElement? {
         guard remainingDepth > 0 else { return nil }
 
-        if isEnabled(element),
-           let title = copyStringAttribute(element, attribute: kAXTitleAttribute),
-           Self.isPlainPasteMenuTitle(title) {
+        if isEnabled(element), isPasteMenuItem(element) {
             return element
         }
 
@@ -363,7 +361,7 @@ class TextInserter {
             Log.textInsertion.debug("No focused UI element available for accessibility insert")
             return .failure(.noFocusedElement)
         }
-        let element = unsafeBitCast(focusedRef, to: AXUIElement.self)
+        let element = focusedRef as! AXUIElement
         // Try setting selected text directly (replaces current selection)
         if isAttributeSettable(element, attribute: kAXSelectedTextAttribute) {
             let result = AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFString)
@@ -415,8 +413,7 @@ class TextInserter {
         guard focusedResult == .success, let focusedRef else {
             return nil
         }
-
-        let element = unsafeBitCast(focusedRef, to: AXUIElement.self)
+        let element = focusedRef as! AXUIElement
         guard let value = copyStringAttribute(element, attribute: kAXValueAttribute),
               let selectedRange = copySelectedRange(element) else {
             return nil
@@ -474,7 +471,7 @@ class TextInserter {
         guard result == .success, let valueRef else {
             return nil
         }
-        return unsafeBitCast(valueRef, to: AXUIElement.self)
+        return valueRef as! AXUIElement
     }
 
     private func copyAXElementArrayAttribute(_ element: AXUIElement, attribute: String) -> [AXUIElement] {
@@ -492,13 +489,35 @@ class TextInserter {
         guard result == .success, let rangeRef else {
             return nil
         }
-        let rangeValue = unsafeBitCast(rangeRef, to: AXValue.self)
+        let rangeValue = rangeRef as! AXValue
 
         var range = CFRange()
         if AXValueGetValue(rangeValue, .cfRange, &range) {
             return range
         }
         return nil
+    }
+
+    private func isPasteMenuItem(_ element: AXUIElement) -> Bool {
+        if let commandCharacter = copyStringAttribute(element, attribute: kAXMenuItemCmdCharAttribute as String),
+           let modifiers = copyIntAttribute(element, attribute: kAXMenuItemCmdModifiersAttribute as String),
+           Self.isPlainPasteMenuShortcut(commandCharacter: commandCharacter, modifiers: modifiers) {
+            return true
+        }
+
+        guard let title = copyStringAttribute(element, attribute: kAXTitleAttribute) else {
+            return false
+        }
+        return Self.isPlainPasteMenuTitle(title)
+    }
+
+    private func copyIntAttribute(_ element: AXUIElement, attribute: String) -> Int? {
+        var valueRef: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &valueRef)
+        guard result == .success, let value = valueRef as? NSNumber else {
+            return nil
+        }
+        return value.intValue
     }
 
     static func applyInsertion(text: String, to currentValue: String, range: CFRange) -> String {
@@ -543,6 +562,11 @@ class TextInserter {
 
     static func isPlainPasteMenuTitle(_ title: String) -> Bool {
         title.trimmingCharacters(in: .whitespacesAndNewlines) == "Paste"
+    }
+
+    static func isPlainPasteMenuShortcut(commandCharacter: String, modifiers: Int) -> Bool {
+        commandCharacter.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "v" &&
+            modifiers == 0
     }
 
     static func clonePasteboardItems(_ items: [NSPasteboardItem]?) -> [NSPasteboardItem] {
