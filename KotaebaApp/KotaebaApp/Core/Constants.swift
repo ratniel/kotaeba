@@ -137,6 +137,7 @@ enum Constants {
         static let defaultModifiers: HotkeyModifiers = .control
         static let escapeKeyCode: UInt16 = 53
         static let minimumHoldDuration: TimeInterval = 0.18
+        static let doubleTapLockWindow: TimeInterval = 0.45
         static let defaultDisplayString = HotkeyShortcut.default.displayString
     }
     
@@ -339,7 +340,7 @@ enum RecordingMode: String, CaseIterable, Codable {
 
     var description: String {
         switch self {
-        case .hold: return "Hold the hotkey while speaking, release to stop"
+        case .hold: return "Hold the hotkey while speaking, or double-tap to lock dictation"
         case .toggle: return "Press hotkey to start, press again to stop"
         }
     }
