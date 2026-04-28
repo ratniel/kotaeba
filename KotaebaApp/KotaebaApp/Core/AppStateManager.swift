@@ -39,10 +39,35 @@ class AppStateManager: ObservableObject {
     @Published private(set) var modelDownloadStatus: ModelDownloadStatus = .unknown
     @Published private(set) var modelDownloadError: String?
     @Published private(set) var modelDownloadProgress: Double?
+    @Published private(set) var customModels: [Constants.Models.Model] = []
+    @Published private(set) var customModelValidationStatus: CustomModelValidationStatus = .idle
+    @Published private(set) var customModelValidationError: String?
     @Published private(set) var lastDiagnosticErrorDetails: String?
     @Published private(set) var serverStartupStage: ServerStartupStage?
     @Published private(set) var aggregatedStats: AggregatedStats = .empty
     @Published private(set) var todayStats: AggregatedStats = .empty
+    var availableModels: [Constants.Models.Model] {
+        Constants.Models.mergedModels(
+            bundledModels: Constants.Models.catalog.models,
+            customModels: customModels
+        )
+    }
+    var modelPreflightState: ModelPreflightState {
+        if customModelValidationStatus.isRunning {
+            return .validatingCustomModel
+        }
+        return ModelPreflightState.resolve(appState: state, downloadStatus: modelDownloadStatus)
+    }
+    var isModelSelectionLocked: Bool {
+        modelPreflightState.locksModelSelection || state == .connecting || state == .recording
+    }
+    var modelSelectionLockMessage: String? {
+        modelPreflightState.selectionLockMessage ?? (
+            state == .connecting || state == .recording
+                ? "Stop the active recording before changing models."
+                : nil
+        )
+    }
     @Published private(set) var audioInputDevices: [AudioInputDevice] = [.systemDefault]
     @Published private(set) var selectedAudioInputDeviceID = AudioInputDevice.systemDefaultID
     
@@ -55,6 +80,8 @@ class AppStateManager: ObservableObject {
     private var textInserter: TextInserter?
     private let statisticsManager: any StatisticsManaging
     private let webSocketClientFactory: @MainActor (URL) -> any WebSocketClienting
+    private let huggingFaceModelInfoProvider: (String, String?) async throws -> HuggingFaceModelInfo
+    private let huggingFaceTokenProvider: @MainActor () -> String?
     private var permissionRefreshTask: Task<Void, Never>?
     private var pendingWebSocketDisconnectTask: Task<Void, Never>?
     private var activeAudioSessionID: AudioCaptureSessionID?
@@ -69,6 +96,10 @@ class AppStateManager: ObservableObject {
     private init() {
         self.statisticsManager = StatisticsManager.shared
         self.webSocketClientFactory = { WebSocketClient(serverURL: $0) }
+        self.huggingFaceModelInfoProvider = HuggingFaceModelLookup.fetchModelInfo
+        self.huggingFaceTokenProvider = {
+            KeychainSecretStore.string(for: Constants.SecureSettingsKeys.huggingFaceToken)
+        }
         loadPreferences()
         setupComponents()
         refreshStatistics()
@@ -87,10 +118,16 @@ class AppStateManager: ObservableObject {
         textInserter: TextInserter? = nil,
         statisticsManager: (any StatisticsManaging)? = nil,
         webSocketClientFactory: @MainActor @escaping (URL) -> any WebSocketClienting = { WebSocketClient(serverURL: $0) },
+        huggingFaceModelInfoProvider: @escaping (String, String?) async throws -> HuggingFaceModelInfo = HuggingFaceModelLookup.fetchModelInfo,
+        huggingFaceTokenProvider: @MainActor @escaping () -> String? = {
+            KeychainSecretStore.string(for: Constants.SecureSettingsKeys.huggingFaceToken)
+        },
         shouldAutoStartServer: Bool = false
     ) {
         self.statisticsManager = statisticsManager ?? StatisticsManager.shared
         self.webSocketClientFactory = webSocketClientFactory
+        self.huggingFaceModelInfoProvider = huggingFaceModelInfoProvider
+        self.huggingFaceTokenProvider = huggingFaceTokenProvider
         self.serverManager = serverManager
         self.audioCapture = audioCapture
         self.textInserter = textInserter
@@ -117,6 +154,7 @@ class AppStateManager: ObservableObject {
         ])
         SettingsMigration.migrateIfNeeded()
         currentHotkey = HotkeyShortcutStore.load()
+        customModels = CustomModelCatalogStore.loadModels()
 
         if let modeString = UserDefaults.standard.string(forKey: Constants.UserDefaultsKeys.recordingMode),
            let mode = RecordingMode(rawValue: modeString) {
@@ -125,7 +163,7 @@ class AppStateManager: ObservableObject {
 
         // Load selected model
         if let modelId = UserDefaults.standard.string(forKey: Constants.UserDefaultsKeys.selectedModel) {
-            if let model = Constants.Models.model(withIdentifier: modelId) {
+            if let model = model(withIdentifier: modelId) {
                 selectedModel = model
             } else {
                 selectedModel = Constants.Models.defaultModel
@@ -557,19 +595,33 @@ class AppStateManager: ObservableObject {
     
     // MARK: - Model Management
 
+    private func model(withIdentifier identifier: String) -> Constants.Models.Model? {
+        let normalizedIdentifier = Constants.Models.normalizedIdentifier(identifier)
+        return availableModels.first { $0.identifier == normalizedIdentifier }
+    }
+
     func checkModelDownloadStatus() async {
         if modelDownloadStatus == .downloading {
             return
         }
 
+        let modelIdentifier = selectedModel.identifier
         modelDownloadStatus = .checking
 
         do {
-            let isDownloaded = try await serverManager?.checkModelExists(selectedModel.identifier) ?? false
+            let isDownloaded = try await serverManager?.checkModelExists(modelIdentifier) ?? false
+            guard selectedModel.identifier == modelIdentifier else {
+                Log.server.debug("Ignoring model status result for stale model \(modelIdentifier)")
+                return
+            }
             modelDownloadStatus = isDownloaded ? .downloaded : .notDownloaded
             modelDownloadError = nil
             modelDownloadProgress = nil
         } catch {
+            guard selectedModel.identifier == modelIdentifier else {
+                Log.server.debug("Ignoring model status error for stale model \(modelIdentifier): \(error.localizedDescription)")
+                return
+            }
             Log.server.error("Failed to check model status: \(error)")
             modelDownloadStatus = .unknown
             modelDownloadError = error.localizedDescription
@@ -580,6 +632,18 @@ class AppStateManager: ObservableObject {
     func setSelectedModel(_ model: Constants.Models.Model) async {
         guard model.identifier != selectedModel.identifier else {
             return
+        }
+        guard !modelPreflightState.locksModelSelection else {
+            Log.server.info(
+                "Ignoring model change to \(model.identifier) while model preflight is locked: \(modelPreflightState)"
+            )
+            return
+        }
+
+        let wasActive = state == .recording || state == .connecting
+        if wasActive {
+            cancelRecording()
+            Log.app.info("Model changed while active; stopped recording before switching to \(model.name)")
         }
 
         selectedModel = model
@@ -596,6 +660,81 @@ class AppStateManager: ObservableObject {
             stopServer()
             await startServer()
         }
+
+        if wasActive {
+            recordingModePromptMessage = "Recording stopped. Press \(currentHotkey.displayString) to start again with \(model.name)."
+            Log.app.info("Model changed while active; stopped recording and showing restart prompt for \(model.name)")
+        }
+    }
+
+    @discardableResult
+    func addCustomModel(identifier rawIdentifier: String) async -> Bool {
+        let identifier = Constants.Models.normalizedIdentifier(
+            rawIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+
+        guard !isModelSelectionLocked else {
+            customModelValidationError = modelSelectionLockMessage ?? "Wait for current model work to finish."
+            return false
+        }
+
+        guard Constants.Models.isValidIdentifier(identifier) else {
+            customModelValidationError = HuggingFaceModelLookupError.invalidIdentifier(rawIdentifier).localizedDescription
+            return false
+        }
+
+        if let existingModel = model(withIdentifier: identifier) {
+            customModelValidationError = nil
+            await setSelectedModel(existingModel)
+            return selectedModel.identifier == existingModel.identifier
+        }
+
+        guard let serverManager else {
+            customModelValidationError = "Server manager unavailable."
+            return false
+        }
+
+        customModelValidationError = nil
+        customModelValidationStatus = .checkingRepository
+        defer {
+            customModelValidationStatus = .idle
+        }
+
+        do {
+            let info = try await huggingFaceModelInfoProvider(identifier, huggingFaceTokenProvider())
+            try HuggingFaceModelLookup.validateSpeechToTextCandidate(info)
+
+            customModelValidationStatus = .validatingCompatibility
+            try await serverManager.validateModelCompatibility(identifier)
+
+            customModelValidationStatus = .saving
+            let model = CustomModelCatalogStore.model(for: info)
+            CustomModelCatalogStore.upsert(model)
+            customModels = CustomModelCatalogStore.loadModels()
+            selectedModel = model
+            UserDefaults.standard.set(model.identifier, forKey: Constants.UserDefaultsKeys.selectedModel)
+            modelDownloadStatus = .downloaded
+            modelDownloadError = nil
+            modelDownloadProgress = nil
+            lastDiagnosticErrorDetails = nil
+
+            if state == .serverRunning {
+                Log.server.info("Restarting server with custom model: \(model.name)")
+                stopServer()
+                await startServer()
+            }
+
+            return true
+        } catch {
+            Log.server.error("Failed to add custom model \(identifier): \(error.localizedDescription)")
+            customModelValidationError = error.localizedDescription
+            return false
+        }
+    }
+
+    func clearCustomModelValidationMessage() {
+        guard !customModelValidationStatus.isRunning else { return }
+        customModelValidationError = nil
     }
 
     private func ensureDefaultModelDownloadedIfNeeded() async {
@@ -620,25 +759,38 @@ class AppStateManager: ObservableObject {
             return
         }
 
+        let modelIdentifier = selectedModel.identifier
         modelDownloadStatus = .downloading
         modelDownloadError = nil
         modelDownloadProgress = nil
 
         do {
-            try await serverManager.downloadModel(selectedModel.identifier) { progress in
+            try await serverManager.downloadModel(modelIdentifier) { progress in
                 Task { @MainActor in
+                    guard self.selectedModel.identifier == modelIdentifier else {
+                        Log.server.debug("Ignoring download progress for stale model \(modelIdentifier)")
+                        return
+                    }
                     self.modelDownloadProgress = progress
                 }
+            }
+            guard selectedModel.identifier == modelIdentifier else {
+                Log.server.debug("Ignoring completed download for stale model \(modelIdentifier)")
+                return
             }
             modelDownloadStatus = .downloaded
             modelDownloadError = nil
             modelDownloadProgress = nil
 
-            if selectedModel.identifier == Constants.Models.defaultModel.identifier {
+            if modelIdentifier == Constants.Models.defaultModel.identifier {
                 UserDefaults.standard.set(true, forKey: Constants.UserDefaultsKeys.didAutoDownloadDefaultModel)
             }
         } catch {
-            Log.server.error("Failed to download model \(selectedModel.identifier): \(error)")
+            guard selectedModel.identifier == modelIdentifier else {
+                Log.server.debug("Ignoring download error for stale model \(modelIdentifier): \(error.localizedDescription)")
+                return
+            }
+            Log.server.error("Failed to download model \(modelIdentifier): \(error)")
             modelDownloadStatus = .notDownloaded
             modelDownloadError = error.localizedDescription
             modelDownloadProgress = nil

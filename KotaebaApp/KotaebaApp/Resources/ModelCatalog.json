@@ -1,0 +1,23 @@
+{
+  "default_model": "mlx-community/parakeet-tdt-0.6b-v2",
+  "models": [
+    {
+      "name": "Parakeet-TDT-0.6B",
+      "identifier": "mlx-community/parakeet-tdt-0.6b-v2",
+      "description": "Fast, low memory",
+      "language_coverage": "English",
+      "size": "0.6B",
+      "speed_label": "Fast",
+      "quality_label": "Balanced"
+    },
+    {
+      "name": "Whisper Large V3 Turbo",
+      "identifier": "mlx-community/whisper-large-v3-turbo",
+      "description": "High quality, balanced",
+      "language_coverage": "Multilingual",
+      "size": "Large V3 Turbo",
+      "speed_label": "Balanced",
+      "quality_label": "High quality"
+    }
+  ]
+}

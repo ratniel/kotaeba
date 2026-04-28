@@ -70,32 +70,76 @@ enum Constants {
 
     // MARK: - Models
     enum Models {
-        struct Model {
+        struct Model: Codable, Equatable {
             let name: String
             let identifier: String
             let description: String
+            let languageCoverage: String
+            let size: String
+            let speedLabel: String
+            let qualityLabel: String
+
+            enum CodingKeys: String, CodingKey {
+                case name
+                case identifier
+                case description
+                case languageCoverage = "language_coverage"
+                case size
+                case speedLabel = "speed_label"
+                case qualityLabel = "quality_label"
+            }
+
+            init(
+                name: String,
+                identifier: String,
+                description: String,
+                languageCoverage: String,
+                size: String,
+                speedLabel: String,
+                qualityLabel: String
+            ) {
+                self.name = name
+                self.identifier = identifier
+                self.description = description
+                self.languageCoverage = languageCoverage
+                self.size = size
+                self.speedLabel = speedLabel
+                self.qualityLabel = qualityLabel
+            }
+
+            var summary: String {
+                "\(speedLabel) • \(qualityLabel) • \(size)"
+            }
         }
 
         static let currentQwenIdentifier = "Qwen/Qwen3-ASR-1.7B"
         static let legacyQwenIdentifier = "mlx-community/Qwen3-ASR-0.6B-8bit"
-
-        static let availableModels: [Model] = [
-            Model(
-                name: "Parakeet-TDT-0.6B",
-                identifier: "mlx-community/parakeet-tdt-0.6b-v2",
-                description: "Fast, low memory (Default)"
-            ),
-            Model(
-                name: "Whisper Large V3 Turbo",
-                identifier: "mlx-community/whisper-large-v3-turbo",
-                description: "High quality, balanced"
-            )
-        ]
-
-        static let defaultModel = availableModels[0]
+        static let catalog = ModelCatalogLoader.load()
+        static var availableModels: [Model] {
+            mergedModels(bundledModels: catalog.models, customModels: CustomModelCatalogStore.loadModels())
+        }
+        static var defaultModel: Model { catalog.defaultModel }
 
         static func model(withIdentifier identifier: String) -> Model? {
             availableModels.first(where: { $0.identifier == normalizedIdentifier(identifier) })
+        }
+
+        static func isValidIdentifier(_ identifier: String) -> Bool {
+            ModelCatalogLoader.isValidModelIdentifier(identifier)
+        }
+
+        static func mergedModels(bundledModels: [Model], customModels: [Model]) -> [Model] {
+            var seenIdentifiers = Set<String>()
+            var models: [Model] = []
+
+            for model in bundledModels + customModels {
+                let normalizedIdentifier = normalizedIdentifier(model.identifier)
+                guard !seenIdentifiers.contains(normalizedIdentifier) else { continue }
+                seenIdentifiers.insert(normalizedIdentifier)
+                models.append(model)
+            }
+
+            return models
         }
 
         static func normalizedIdentifier(_ identifier: String) -> String {
@@ -279,6 +323,7 @@ enum Constants {
         static let showDiagnosticsUI = "showDiagnosticsUI"
         static let selectedAudioDevice = "selectedAudioDevice"
         static let selectedModel = "selectedModel"
+        static let customModels = "customModels"
         static let didAutoDownloadDefaultModel = "didAutoDownloadDefaultModel"
     }
 
@@ -391,6 +436,74 @@ enum ModelDownloadStatus {
         case .downloading: return Constants.UI.accentOrange
         case .downloaded: return Constants.UI.successGreen
         case .notDownloaded: return Constants.UI.textSecondary
+        }
+    }
+}
+
+// MARK: - Model Preflight
+
+enum ModelPreflightState: Equatable {
+    case idle
+    case checkingCache
+    case downloading
+    case validatingCustomModel
+    case validatingAndStartingServer
+
+    static func resolve(appState: AppState, downloadStatus: ModelDownloadStatus) -> ModelPreflightState {
+        if appState == .serverStarting {
+            return .validatingAndStartingServer
+        }
+
+        switch downloadStatus {
+        case .checking:
+            return .checkingCache
+        case .downloading:
+            return .downloading
+        case .unknown, .downloaded, .notDownloaded:
+            return .idle
+        }
+    }
+
+    var locksModelSelection: Bool {
+        self != .idle
+    }
+
+    var selectionLockMessage: String? {
+        switch self {
+        case .idle:
+            return nil
+        case .checkingCache:
+            return "Checking the selected model before allowing another change."
+        case .downloading:
+            return "Downloading the selected model before allowing another change."
+        case .validatingCustomModel:
+            return "Validating a custom model before allowing another change."
+        case .validatingAndStartingServer:
+            return "Validating the selected model before allowing another change."
+        }
+    }
+}
+
+enum CustomModelValidationStatus: Equatable {
+    case idle
+    case checkingRepository
+    case validatingCompatibility
+    case saving
+
+    var isRunning: Bool {
+        self != .idle
+    }
+
+    var displayText: String {
+        switch self {
+        case .idle:
+            return ""
+        case .checkingRepository:
+            return "Checking Hugging Face"
+        case .validatingCompatibility:
+            return "Validating model (may download files)"
+        case .saving:
+            return "Saving model"
         }
     }
 }

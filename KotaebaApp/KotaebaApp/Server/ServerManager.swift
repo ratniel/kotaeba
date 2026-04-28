@@ -9,6 +9,7 @@ protocol ServerManaging: AnyObject {
     func stop()
     func stopAndWait(timeout: TimeInterval) async
     func checkModelExists(_ modelIdentifier: String) async throws -> Bool
+    func validateModelCompatibility(_ modelIdentifier: String) async throws
     func downloadModel(_ modelIdentifier: String, progressHandler: ((Double) -> Void)?) async throws
 }
 
@@ -643,6 +644,18 @@ class ServerManager {
 
     // MARK: - Model Management
 
+    /// Validate that MLX Audio can load the model before it is saved or selected.
+    func validateModelCompatibility(_ modelIdentifier: String) async throws {
+        guard Constants.Models.isValidIdentifier(modelIdentifier) else {
+            throw ServerError.invalidModelIdentifier
+        }
+        guard let pythonURL = Constants.Setup.pythonPath else {
+            throw ServerError.setupRequired
+        }
+
+        try await validateModelStartup(modelIdentifier: modelIdentifier, pythonURL: pythonURL)
+    }
+
     /// Check if a model exists in the local cache
     func checkModelExists(_ modelIdentifier: String) async throws -> Bool {
         // Check in the HuggingFace cache directory
@@ -668,10 +681,15 @@ class ServerManager {
 
         var lastProgress: Double = 0
         let percentRegex = try? NSRegularExpression(pattern: "(\\d{1,3})(?:\\.\\d+)?%")
-        let command = "from mlx_audio.utils import load_model; load_model('\(modelIdentifier)')"
+        let command = """
+        import sys
+        from mlx_audio.utils import load_model
+
+        load_model(sys.argv[1])
+        """
         try await ShellCommandRunner.run(
             executableURL: pythonURL,
-            arguments: ["-c", command],
+            arguments: ["-c", command, modelIdentifier],
             currentDirectory: Constants.supportDirectory,
             environment: ServerEnvironment.build(model: modelIdentifier)
         ) { output in
