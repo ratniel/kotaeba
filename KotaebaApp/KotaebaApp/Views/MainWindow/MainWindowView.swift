@@ -11,6 +11,7 @@ struct MainWindowView: View {
 
     private var visibleSidebarItems: [SidebarItem] {
         var items: [SidebarItem] = [.home]
+        items.append(.history)
         if diagnosticsEnabled {
             items.append(.diagnostics)
         }
@@ -30,6 +31,8 @@ struct MainWindowView: View {
             switch selection ?? .home {
             case .home:
                 HomeDashboardView()
+            case .history:
+                TranscriptionHistoryView()
             case .diagnostics:
                 if diagnosticsEnabled {
                     DiagnosticsView()
@@ -64,11 +67,13 @@ struct MainWindowView: View {
 
 enum SidebarItem: String, CaseIterable, Identifiable {
     case home = "Home"
+    case history = "History"
     case diagnostics = "Test App"
     case settings = "Settings"
 
     static var visibleCases: [SidebarItem] {
         var items: [SidebarItem] = [.home]
+        items.append(.history)
         if Constants.FeatureFlags.showDiagnosticsUI {
             items.append(.diagnostics)
         }
@@ -85,6 +90,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .home: return "house.fill"
+        case .history: return "clock.arrow.circlepath"
         case .diagnostics: return "hammer.fill"
         case .settings: return "gearshape.fill"
         }
