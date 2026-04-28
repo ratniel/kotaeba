@@ -115,7 +115,7 @@ final class HotkeyProcessorTests: XCTestCase {
 
         XCTAssertEqual(shortRelease.actions, [.cancelRecording])
         XCTAssertTrue(shortRelease.shouldConsumeEvent)
-        XCTAssertEqual(processor.state, .idle)
+        XCTAssertEqual(processor.state, .awaitingSecondTap(firstTapEndedAt: 1.05))
     }
 
     func testTapDisabledDuringHoldCancelsAndRequestsReenable() {
@@ -136,6 +136,169 @@ final class HotkeyProcessorTests: XCTestCase {
         )
         XCTAssertEqual(release.actions, [])
         XCTAssertTrue(release.shouldConsumeEvent)
+        XCTAssertEqual(processor.state, .idle)
+    }
+
+    func testHoldModeDoubleTapLocksAndNextPressReleaseStops() {
+        var processor = makeProcessor()
+
+        _ = processor.handle(
+            .keyDown(keyCode: xKeyCode, modifiers: .control, timestamp: 1.0),
+            recordingMode: .hold
+        )
+        let firstRelease = processor.handle(
+            .keyUp(keyCode: xKeyCode, modifiers: .control, timestamp: 1.05),
+            recordingMode: .hold
+        )
+        XCTAssertEqual(firstRelease.actions, [.cancelRecording])
+        XCTAssertEqual(processor.state, .awaitingSecondTap(firstTapEndedAt: 1.05))
+
+        let secondDown = processor.handle(
+            .keyDown(keyCode: xKeyCode, modifiers: .control, timestamp: 1.2),
+            recordingMode: .hold
+        )
+        XCTAssertEqual(secondDown.actions, [.startRecording])
+        XCTAssertTrue(secondDown.shouldConsumeEvent)
+        XCTAssertEqual(processor.state, .doubleTapRecording(startedAt: 1.2))
+
+        let secondUp = processor.handle(
+            .keyUp(keyCode: xKeyCode, modifiers: .control, timestamp: 1.25),
+            recordingMode: .hold
+        )
+        XCTAssertEqual(secondUp.actions, [])
+        XCTAssertTrue(secondUp.shouldConsumeEvent)
+        XCTAssertEqual(processor.state, .lockedRecording)
+
+        let stopDown = processor.handle(
+            .keyDown(keyCode: xKeyCode, modifiers: .control, timestamp: 3.0),
+            recordingMode: .hold
+        )
+        XCTAssertEqual(stopDown.actions, [])
+        XCTAssertTrue(stopDown.shouldConsumeEvent)
+        XCTAssertEqual(processor.state, .lockedStopKeyPressed)
+
+        let stopUp = processor.handle(
+            .keyUp(keyCode: xKeyCode, modifiers: .control, timestamp: 3.1),
+            recordingMode: .hold
+        )
+        XCTAssertEqual(stopUp.actions, [.stopRecording])
+        XCTAssertTrue(stopUp.shouldConsumeEvent)
+        XCTAssertEqual(processor.state, .idle)
+    }
+
+    func testDoubleTapTimingExpiryStartsANewHold() {
+        var processor = makeProcessor()
+
+        _ = processor.handle(
+            .keyDown(keyCode: xKeyCode, modifiers: .control, timestamp: 1.0),
+            recordingMode: .hold
+        )
+        _ = processor.handle(
+            .keyUp(keyCode: xKeyCode, modifiers: .control, timestamp: 1.05),
+            recordingMode: .hold
+        )
+
+        let lateSecondDown = processor.handle(
+            .keyDown(keyCode: xKeyCode, modifiers: .control, timestamp: 1.5),
+            recordingMode: .hold
+        )
+        XCTAssertEqual(lateSecondDown.actions, [.startRecording])
+        XCTAssertTrue(lateSecondDown.shouldConsumeEvent)
+        XCTAssertEqual(processor.state, .holdRecording(startedAt: 1.5))
+
+        let release = processor.handle(
+            .keyUp(keyCode: xKeyCode, modifiers: .control, timestamp: 1.8),
+            recordingMode: .hold
+        )
+        XCTAssertEqual(release.actions, [.stopRecording])
+        XCTAssertEqual(processor.state, .idle)
+    }
+
+    func testKeyRepeatDoesNotCountAsSecondTap() {
+        var processor = makeProcessor()
+
+        _ = processor.handle(
+            .keyDown(keyCode: xKeyCode, modifiers: .control, timestamp: 1.0),
+            recordingMode: .hold
+        )
+        _ = processor.handle(
+            .keyUp(keyCode: xKeyCode, modifiers: .control, timestamp: 1.05),
+            recordingMode: .hold
+        )
+
+        let repeatResult = processor.handle(
+            .keyDown(keyCode: xKeyCode, modifiers: .control, isRepeat: true, timestamp: 1.1),
+            recordingMode: .hold
+        )
+        XCTAssertEqual(repeatResult.actions, [])
+        XCTAssertTrue(repeatResult.shouldConsumeEvent)
+        XCTAssertEqual(processor.state, .awaitingSecondTap(firstTapEndedAt: 1.05))
+
+        let secondDown = processor.handle(
+            .keyDown(keyCode: xKeyCode, modifiers: .control, timestamp: 1.2),
+            recordingMode: .hold
+        )
+        XCTAssertEqual(secondDown.actions, [.startRecording])
+        XCTAssertEqual(processor.state, .doubleTapRecording(startedAt: 1.2))
+    }
+
+    func testUnrelatedKeyPressClearsPendingDoubleTap() {
+        var processor = makeProcessor()
+
+        _ = processor.handle(
+            .keyDown(keyCode: xKeyCode, modifiers: .control, timestamp: 1.0),
+            recordingMode: .hold
+        )
+        _ = processor.handle(
+            .keyUp(keyCode: xKeyCode, modifiers: .control, timestamp: 1.05),
+            recordingMode: .hold
+        )
+
+        let unrelatedKey = processor.handle(
+            .keyDown(keyCode: 49, modifiers: [], timestamp: 1.1),
+            recordingMode: .hold
+        )
+        XCTAssertEqual(unrelatedKey.actions, [])
+        XCTAssertFalse(unrelatedKey.shouldConsumeEvent)
+        XCTAssertEqual(processor.state, .idle)
+
+        let nextHotkey = processor.handle(
+            .keyDown(keyCode: xKeyCode, modifiers: .control, timestamp: 1.2),
+            recordingMode: .hold
+        )
+        XCTAssertEqual(nextHotkey.actions, [.startRecording])
+        XCTAssertEqual(processor.state, .holdRecording(startedAt: 1.2))
+    }
+
+    func testEscapeCancelsLockedRecording() {
+        var processor = makeLockedHoldProcessor()
+
+        let cancel = processor.handle(
+            .keyDown(keyCode: escapeKeyCode, modifiers: .control, timestamp: 2.0),
+            recordingMode: .hold
+        )
+
+        XCTAssertEqual(cancel.actions, [.cancelRecording])
+        XCTAssertTrue(cancel.shouldConsumeEvent)
+        XCTAssertEqual(processor.state, .idle)
+    }
+
+    func testTapDisabledDuringDoubleTapSequenceClearsPendingLock() {
+        var processor = makeProcessor()
+
+        _ = processor.handle(
+            .keyDown(keyCode: xKeyCode, modifiers: .control, timestamp: 1.0),
+            recordingMode: .hold
+        )
+        _ = processor.handle(
+            .keyUp(keyCode: xKeyCode, modifiers: .control, timestamp: 1.05),
+            recordingMode: .hold
+        )
+
+        let disabled = processor.handle(.tapDisabled(timestamp: 1.1), recordingMode: .hold)
+
+        XCTAssertEqual(disabled.actions, [.reenableEventTap])
+        XCTAssertFalse(disabled.shouldConsumeEvent)
         XCTAssertEqual(processor.state, .idle)
     }
 
@@ -175,7 +338,7 @@ final class HotkeyProcessorTests: XCTestCase {
         XCTAssertEqual(processor.state, .idle)
     }
 
-    func testTapDisabledWhileLockedOnlyRequestsReenable() {
+    func testTapDisabledWhileLockedCancelsAndRequestsReenable() {
         var processor = makeProcessor()
         _ = processor.handle(
             .keyDown(keyCode: xKeyCode, modifiers: .control, timestamp: 1.0),
@@ -188,9 +351,80 @@ final class HotkeyProcessorTests: XCTestCase {
 
         let disabled = processor.handle(.tapDisabled(timestamp: 1.3), recordingMode: .toggle)
 
-        XCTAssertEqual(disabled.actions, [.reenableEventTap])
+        XCTAssertEqual(disabled.actions, [.cancelRecording, .reenableEventTap])
         XCTAssertFalse(disabled.shouldConsumeEvent)
-        XCTAssertEqual(processor.state, .lockedRecording)
+        XCTAssertEqual(processor.state, .idle)
+    }
+
+    func testTapDisabledWhileLockedStopKeyPressedWaitsForRelease() {
+        var processor = makeLockedHoldProcessor()
+        _ = processor.handle(
+            .keyDown(keyCode: xKeyCode, modifiers: .control, timestamp: 2.0),
+            recordingMode: .hold
+        )
+
+        let disabled = processor.handle(.tapDisabled(timestamp: 2.05), recordingMode: .hold)
+
+        XCTAssertEqual(disabled.actions, [.cancelRecording, .reenableEventTap])
+        XCTAssertFalse(disabled.shouldConsumeEvent)
+        XCTAssertEqual(processor.state, .dirtyWaitingForRelease)
+
+        let release = processor.handle(
+            .keyUp(keyCode: xKeyCode, modifiers: .control, timestamp: 2.1),
+            recordingMode: .hold
+        )
+
+        XCTAssertEqual(release.actions, [])
+        XCTAssertTrue(release.shouldConsumeEvent)
+        XCTAssertEqual(processor.state, .idle)
+    }
+
+    func testModifierReleaseWhileLockedStopKeyPressedWaitsForKeyRelease() {
+        var processor = makeLockedHoldProcessor()
+        _ = processor.handle(
+            .keyDown(keyCode: xKeyCode, modifiers: .control, timestamp: 2.0),
+            recordingMode: .hold
+        )
+
+        let modifierRelease = processor.handle(
+            .modifiersChanged(modifiers: [], timestamp: 2.05),
+            recordingMode: .hold
+        )
+
+        XCTAssertEqual(modifierRelease.actions, [.stopRecording])
+        XCTAssertFalse(modifierRelease.shouldConsumeEvent)
+        XCTAssertEqual(processor.state, .dirtyWaitingForRelease)
+
+        let keyRelease = processor.handle(
+            .keyUp(keyCode: xKeyCode, modifiers: [], timestamp: 2.1),
+            recordingMode: .hold
+        )
+
+        XCTAssertEqual(keyRelease.actions, [])
+        XCTAssertTrue(keyRelease.shouldConsumeEvent)
+        XCTAssertEqual(processor.state, .idle)
+    }
+
+    func testResetClearsPendingDoubleTapAndLockedRecordingState() {
+        var pendingProcessor = makeProcessor()
+        _ = pendingProcessor.handle(
+            .keyDown(keyCode: xKeyCode, modifiers: .control, timestamp: 1.0),
+            recordingMode: .hold
+        )
+        _ = pendingProcessor.handle(
+            .keyUp(keyCode: xKeyCode, modifiers: .control, timestamp: 1.05),
+            recordingMode: .hold
+        )
+
+        pendingProcessor.reset()
+
+        XCTAssertEqual(pendingProcessor.state, .idle)
+
+        var lockedProcessor = makeLockedHoldProcessor()
+
+        lockedProcessor.reset()
+
+        XCTAssertEqual(lockedProcessor.state, .idle)
     }
 
     func testCustomShortcutTriggersInsteadOfDefaultShortcut() {
@@ -224,8 +458,30 @@ final class HotkeyProcessorTests: XCTestCase {
                 keyCode: xKeyCode,
                 requiredModifiers: .control,
                 escapeKeyCode: escapeKeyCode,
-                minimumHoldDuration: 0.18
+                minimumHoldDuration: 0.18,
+                doubleTapLockWindow: 0.3
             )
         )
+    }
+
+    private func makeLockedHoldProcessor() -> HotkeyProcessor {
+        var processor = makeProcessor()
+        _ = processor.handle(
+            .keyDown(keyCode: xKeyCode, modifiers: .control, timestamp: 1.0),
+            recordingMode: .hold
+        )
+        _ = processor.handle(
+            .keyUp(keyCode: xKeyCode, modifiers: .control, timestamp: 1.05),
+            recordingMode: .hold
+        )
+        _ = processor.handle(
+            .keyDown(keyCode: xKeyCode, modifiers: .control, timestamp: 1.2),
+            recordingMode: .hold
+        )
+        _ = processor.handle(
+            .keyUp(keyCode: xKeyCode, modifiers: .control, timestamp: 1.25),
+            recordingMode: .hold
+        )
+        return processor
     }
 }

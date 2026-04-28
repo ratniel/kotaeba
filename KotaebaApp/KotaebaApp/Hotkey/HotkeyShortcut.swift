@@ -19,7 +19,8 @@ struct HotkeyShortcut: Equatable {
             keyCode: keyCode,
             requiredModifiers: modifiers,
             escapeKeyCode: Constants.Hotkey.escapeKeyCode,
-            minimumHoldDuration: Constants.Hotkey.minimumHoldDuration
+            minimumHoldDuration: Constants.Hotkey.minimumHoldDuration,
+            doubleTapLockWindow: Constants.Hotkey.doubleTapLockWindow
         )
     }
 }
