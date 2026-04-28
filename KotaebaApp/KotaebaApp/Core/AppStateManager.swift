@@ -499,9 +499,12 @@ class AppStateManager: ObservableObject {
 
     private func sanitizeForInsertion(_ text: String) -> String {
         let isSafeModeEnabled = UserDefaults.standard.bool(forKey: Constants.UserDefaultsKeys.safeModeEnabled)
-        guard isSafeModeEnabled else { return text }
-        let sanitized = text.components(separatedBy: .newlines).joined(separator: " ")
-        return sanitized
+        return Self.sanitizeForInsertion(text, safeModeEnabled: isSafeModeEnabled)
+    }
+
+    static func sanitizeForInsertion(_ text: String, safeModeEnabled: Bool) -> String {
+        guard safeModeEnabled else { return text }
+        return text.components(separatedBy: .newlines).joined(separator: " ")
     }
 
     private func logTranscription(_ text: String, isPartial: Bool) {
