@@ -32,11 +32,15 @@ class AppStateManager: ObservableObject {
     @Published private(set) var permissionStatus: PermissionStatus = PermissionManager.getPermissionStatus(source: "initial")
     @Published private(set) var isHotkeyActive = false
     @Published private(set) var hotkeyStatusMessage = "Hotkey not initialized"
+    @Published private(set) var recordingModePromptMessage: String?
+    @Published private(set) var currentHotkey: HotkeyShortcut = .default
     @Published var recordingMode: RecordingMode = .hold
     @Published var selectedModel: Constants.Models.Model = Constants.Models.defaultModel
     @Published private(set) var modelDownloadStatus: ModelDownloadStatus = .unknown
     @Published private(set) var modelDownloadError: String?
     @Published private(set) var modelDownloadProgress: Double?
+    @Published private(set) var lastDiagnosticErrorDetails: String?
+    @Published private(set) var serverStartupStage: ServerStartupStage?
     @Published private(set) var aggregatedStats: AggregatedStats = .empty
     @Published private(set) var todayStats: AggregatedStats = .empty
     
@@ -85,6 +89,8 @@ class AppStateManager: ObservableObject {
         self.textInserter = textInserter
         loadPreferences()
         refreshStatistics()
+        self.audioCapture?.delegate = self
+        configureServerCallbacks()
 
         if shouldAutoStartServer && !Constants.isRunningTests {
             Task {
@@ -99,6 +105,8 @@ class AppStateManager: ObservableObject {
             Constants.UserDefaultsKeys.serverHost: Constants.Server.defaultHost,
             Constants.UserDefaultsKeys.serverPort: Constants.Server.defaultPort
         ])
+        SettingsMigration.migrateIfNeeded()
+        currentHotkey = HotkeyShortcutStore.load()
 
         if let modeString = UserDefaults.standard.string(forKey: Constants.UserDefaultsKeys.recordingMode),
            let mode = RecordingMode(rawValue: modeString) {
@@ -106,9 +114,13 @@ class AppStateManager: ObservableObject {
         }
 
         // Load selected model
-        if let modelId = UserDefaults.standard.string(forKey: Constants.UserDefaultsKeys.selectedModel),
-           let model = Constants.Models.availableModels.first(where: { $0.identifier == modelId }) {
-            selectedModel = model
+        if let modelId = UserDefaults.standard.string(forKey: Constants.UserDefaultsKeys.selectedModel) {
+            if let model = Constants.Models.model(withIdentifier: modelId) {
+                selectedModel = model
+            } else {
+                selectedModel = Constants.Models.defaultModel
+                UserDefaults.standard.set(Constants.Models.defaultModel.identifier, forKey: Constants.UserDefaultsKeys.selectedModel)
+            }
         }
     }
     
@@ -118,6 +130,22 @@ class AppStateManager: ObservableObject {
         textInserter = TextInserter()
         // Set up delegates
         audioCapture?.delegate = self
+        configureServerCallbacks()
+    }
+
+    private func configureServerCallbacks() {
+        serverManager?.unexpectedExitHandler = { [weak self] reason in
+            self?.handleUnexpectedServerExit(reason: reason)
+        }
+    }
+
+    private func handleUnexpectedServerExit(reason: String) {
+        pendingWebSocketDisconnectTask?.cancel()
+        pendingWebSocketDisconnectTask = nil
+        audioCapture?.stopRecording()
+        webSocketClient?.disconnect()
+        webSocketClient = nil
+        state = .error(reason)
     }
     
     // MARK: - Hotkey Initialization
@@ -133,11 +161,12 @@ class AppStateManager: ObservableObject {
         refreshPermissionStatus(source: "initializeHotkey")
 
         if hotkeyManager == nil {
-            hotkeyManager = HotkeyManager()
+            hotkeyManager = HotkeyManager(shortcut: currentHotkey)
             hotkeyManager?.delegate = self
         }
 
         hotkeyManager?.recordingMode = recordingMode
+        hotkeyManager?.setHotkey(currentHotkey)
 
         if hotkeyManager?.start(promptIfMissing: promptIfMissing) == true {
             isHotkeyActive = true
@@ -186,6 +215,23 @@ class AppStateManager: ObservableObject {
             }
             return
         }
+
+        _ = initializeHotkey(promptIfMissing: false)
+    }
+
+    @discardableResult
+    func suspendHotkeyForShortcutCapture() -> Bool {
+        let shouldRestore = isHotkeyActive
+        guard shouldRestore else { return false }
+
+        hotkeyManager?.stop()
+        isHotkeyActive = false
+        hotkeyStatusMessage = "Hotkey capture in progress"
+        return true
+    }
+
+    func resumeHotkeyAfterShortcutCapture(shouldRestore: Bool) {
+        guard shouldRestore else { return }
 
         _ = initializeHotkey(promptIfMissing: false)
     }
@@ -239,14 +285,26 @@ class AppStateManager: ObservableObject {
             return
         }
 
+        serverStartupStage = .preparingRuntime
+        lastDiagnosticErrorDetails = nil
         state = .serverStarting
 
         do {
             // Start server with selected model pre-loaded
-            try await serverManager?.start(model: selectedModel.identifier)
+            try await serverManager?.start(model: selectedModel.identifier) { [weak self] stage in
+                self?.serverStartupStage = stage
+            }
+            serverStartupStage = nil
+            lastDiagnosticErrorDetails = nil
             state = .serverRunning
             Log.server.info("Server started successfully with model: \(selectedModel.name)")
         } catch {
+            serverStartupStage = nil
+            if let serverError = error as? ServerError {
+                lastDiagnosticErrorDetails = serverError.diagnosticDetails
+            } else {
+                lastDiagnosticErrorDetails = error.localizedDescription
+            }
             state = .error(error.localizedDescription)
             Log.server.error("Server failed to start: \(error)")
         }
@@ -255,10 +313,12 @@ class AppStateManager: ObservableObject {
     func stopServer() {
         pendingWebSocketDisconnectTask?.cancel()
         pendingWebSocketDisconnectTask = nil
+        clearRecordingModePrompt()
         webSocketClient?.disconnect()
         webSocketClient = nil
         audioCapture?.stopRecording()
         serverManager?.stop()
+        serverStartupStage = nil
         state = .idle
         Log.server.info("Server stopped")
     }
@@ -274,6 +334,7 @@ class AppStateManager: ObservableObject {
 
         pendingWebSocketDisconnectTask?.cancel()
         pendingWebSocketDisconnectTask = nil
+        clearRecordingModePrompt()
         webSocketClient?.disconnect()
         webSocketClient = nil
         
@@ -319,6 +380,26 @@ class AppStateManager: ObservableObject {
         
         state = .serverRunning
         Log.app.info("Recording stopped")
+    }
+
+    func cancelRecording() {
+        Log.app.info("cancelRecording requested (state: \(state), mode: \(recordingMode))")
+        guard state == .recording || state == .connecting else { return }
+
+        pendingWebSocketDisconnectTask?.cancel()
+        pendingWebSocketDisconnectTask = nil
+        audioCapture?.stopRecording()
+        webSocketClient?.disconnect()
+        webSocketClient = nil
+
+        sessionStartTime = nil
+        sessionWordCount = 0
+        currentTranscription = ""
+        lastCompletedTranscription = nil
+        audioAmplitude = 0.0
+
+        state = .serverRunning
+        Log.app.info("Recording cancelled")
     }
 
     private func scheduleWebSocketDisconnectAfterFinalTranscriptGrace() {
@@ -468,6 +549,8 @@ class AppStateManager: ObservableObject {
 
         selectedModel = model
         UserDefaults.standard.set(model.identifier, forKey: Constants.UserDefaultsKeys.selectedModel)
+        lastDiagnosticErrorDetails = nil
+        modelDownloadError = nil
 
         // Check if model is downloaded
         await checkModelDownloadStatus()
@@ -530,9 +613,52 @@ class AppStateManager: ObservableObject {
     // MARK: - Preferences
 
     func setRecordingMode(_ mode: RecordingMode) {
+        guard recordingMode != mode else { return }
+
+        let wasRecording = state == .recording || state == .connecting
+        if wasRecording {
+            stopRecording()
+        } else {
+            clearRecordingModePrompt()
+        }
+
         recordingMode = mode
         hotkeyManager?.recordingMode = mode
         UserDefaults.standard.set(mode.rawValue, forKey: Constants.UserDefaultsKeys.recordingMode)
+
+        if wasRecording {
+            recordingModePromptMessage = "Recording stopped. Press \(currentHotkey.displayString) to start again in \(mode.displayName) mode."
+            Log.app.info("Recording mode changed while active; stopped recording and showing restart prompt for \(mode.displayName) mode")
+        }
+    }
+
+    func setHotkeyShortcut(_ shortcut: HotkeyShortcut) {
+        if case .invalid(let message) = HotkeyShortcutRules.validation(for: shortcut) {
+            Log.hotkey.warning("Rejected invalid hotkey shortcut: \(message)")
+            return
+        }
+
+        guard currentHotkey != shortcut else { return }
+
+        let wasRecording = state == .recording || state == .connecting
+        if wasRecording {
+            stopRecording()
+        } else {
+            clearRecordingModePrompt()
+        }
+
+        currentHotkey = shortcut
+        HotkeyShortcutStore.save(shortcut)
+        hotkeyManager?.setHotkey(shortcut)
+
+        if wasRecording {
+            recordingModePromptMessage = "Recording stopped. Press \(shortcut.displayString) to start again."
+            Log.app.info("Hotkey changed while active; stopped recording and applied \(shortcut.displayString)")
+        }
+    }
+
+    func clearRecordingModePrompt() {
+        recordingModePromptMessage = nil
     }
     
     // MARK: - Shutdown
@@ -607,6 +733,9 @@ extension AppStateManager: WebSocketClientDelegate {
             if state == .recording || state == .connecting {
                 if let error = error {
                     Log.websocket.error("WebSocket disconnected with error: \(error)")
+                    lastDiagnosticErrorDetails = error.localizedDescription
+                    state = .error(userFacingWebSocketErrorMessage(error))
+                    return
                 }
                 state = .serverRunning
             }
@@ -657,6 +786,20 @@ extension AppStateManager: AudioCaptureDelegate {
             webSocketClient?.disconnect()
         }
     }
+
+    private func userFacingWebSocketErrorMessage(_ error: Error) -> String {
+        let message = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if Constants.Models.isQwenModelIdentifier(selectedModel.identifier),
+           (message.contains("ModelConfig.__init__()") ||
+            message.contains("Model type None not supported") ||
+            message.contains("does not recognize this architecture") ||
+            message.contains("qwen3_asr")) {
+            return Constants.Models.startupValidationMessage(for: selectedModel, rawError: message)
+        }
+
+        return message
+    }
 }
 
 // MARK: - HotkeyManagerDelegate
@@ -666,21 +809,21 @@ extension AppStateManager: HotkeyManagerDelegate {
     nonisolated func hotkeyDidTriggerStart() {
         Task { @MainActor in
             Log.hotkey.info("Hotkey start trigger received (mode: \(recordingMode), state: \(state))")
-            if recordingMode == .toggle {
-                toggleRecording()
-            } else {
-                startRecording()
-            }
+            startRecording()
         }
     }
     
     nonisolated func hotkeyDidTriggerStop() {
         Task { @MainActor in
             Log.hotkey.info("Hotkey stop trigger received (mode: \(recordingMode), state: \(state))")
-            if recordingMode == .hold {
-                stopRecording()
-            }
-            // In toggle mode, stop is handled by hotkeyDidTriggerStart
+            stopRecording()
+        }
+    }
+
+    nonisolated func hotkeyDidCancelRecording() {
+        Task { @MainActor in
+            Log.hotkey.info("Hotkey cancel trigger received (mode: \(recordingMode), state: \(state))")
+            cancelRecording()
         }
     }
 }

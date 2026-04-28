@@ -60,9 +60,13 @@ class WebSocketClient: NSObject {
     /// Disconnect from the WebSocket server
     func disconnect() {
         didRequestDisconnect = true
-        webSocketTask?.cancel(with: .goingAway, reason: nil)
+        hasReportedDisconnect = true
+        let task = webSocketTask
         webSocketTask = nil
         isConnected = false
+        delegate = nil
+        task?.cancel(with: .goingAway, reason: nil)
+        session.invalidateAndCancel()
     }
     
     // MARK: - Sending
@@ -116,7 +120,7 @@ class WebSocketClient: NSObject {
                 self?.receiveMessage()
                 
             case .failure(let error):
-                if self?.didRequestDisconnect == true {
+                if self?.didRequestDisconnect == true || self?.hasReportedDisconnect == true {
                     Log.websocket.debug("Receive ended after requested disconnect: \(error.localizedDescription)")
                     return
                 }
@@ -141,6 +145,11 @@ class WebSocketClient: NSObject {
             case .status(let status):
                 Log.websocket.info("Status: \(status.status) - \(status.message)")
                 delegate?.webSocketDidReceiveStatus(self, status: status)
+
+            case .error(let error):
+                Log.websocket.error("Server error: \(error.error)")
+                reportDisconnect(error: WebSocketClientError.server(error.error))
+                webSocketTask?.cancel(with: .internalServerError, reason: error.error.data(using: .utf8))
                 
             case .unknown(let raw):
                 Log.websocket.warning("Unknown message format: \(raw.prefix(100))...")
@@ -162,6 +171,17 @@ class WebSocketClient: NSObject {
     }
 }
 
+private enum WebSocketClientError: LocalizedError {
+    case server(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .server(let message):
+            return message
+        }
+    }
+}
+
 // MARK: - URLSessionWebSocketDelegate
 
 extension WebSocketClient: URLSessionWebSocketDelegate {
@@ -175,7 +195,7 @@ extension WebSocketClient: URLSessionWebSocketDelegate {
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
         let reasonString = reason.flatMap { String(data: $0, encoding: .utf8) } ?? "none"
         Log.websocket.info("Disconnected with code: \(closeCode.rawValue), reason: \(reasonString)")
-        if didRequestDisconnect {
+        if didRequestDisconnect || hasReportedDisconnect {
             return
         }
 
@@ -184,7 +204,7 @@ extension WebSocketClient: URLSessionWebSocketDelegate {
     
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         if let error = error {
-            if didRequestDisconnect {
+            if didRequestDisconnect || hasReportedDisconnect {
                 Log.websocket.debug("Task completed after requested disconnect: \(error.localizedDescription)")
                 return
             }

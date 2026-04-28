@@ -36,6 +36,20 @@ final class ServerMessageParsingTests: XCTestCase {
         }
     }
 
+    func testErrorMessageParsing() {
+        let json = """
+        {"error":"ModelConfig.__init__() missing required arguments"}
+        """
+
+        let message = ServerMessage(from: json)
+        switch message {
+        case .error(let error):
+            XCTAssertTrue(error.error.contains("ModelConfig.__init__()"))
+        default:
+            XCTFail("Expected error message")
+        }
+    }
+
     func testUnknownMessageParsing() {
         let json = """
         {"foo":"bar"}

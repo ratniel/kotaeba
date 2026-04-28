@@ -104,7 +104,13 @@ struct ServerControlView: View {
                 isHovering = hovering
             }
 
-            if stateManager.state == .idle || stateManager.state == .serverRunning {
+            if let prompt = stateManager.recordingModePromptMessage {
+                RecordingModePromptView(message: prompt) {
+                    stateManager.clearRecordingModePrompt()
+                }
+            }
+
+            if shouldShowModelSelection {
                 ModelSelectionView()
             }
         }
@@ -118,7 +124,8 @@ struct ServerControlView: View {
     private var statusTitle: String {
         switch stateManager.state {
         case .idle: return "Offline"
-        case .serverStarting: return "Starting..."
+        case .serverStarting:
+            return stateManager.serverStartupStage?.title ?? "Starting..."
         case .serverRunning: return "Online"
         case .connecting: return "Connecting..."
         case .recording: return "Recording"
@@ -130,7 +137,9 @@ struct ServerControlView: View {
     private var statusSubtitle: String {
         switch stateManager.state {
         case .idle: return "Server is offline"
-        case .serverStarting: return "Loading model: \(stateManager.selectedModel.name)"
+        case .serverStarting:
+            return stateManager.serverStartupStage?.detail(modelName: stateManager.selectedModel.name)
+                ?? "Starting local transcription server..."
         case .serverRunning: return "Ready • \(stateManager.selectedModel.name)"
         case .connecting: return "Establishing connection..."
         case .recording: return "Listening to your voice..."
@@ -190,6 +199,15 @@ struct ServerControlView: View {
         stateManager.state == .serverStarting || stateManager.state == .connecting
     }
 
+    private var shouldShowModelSelection: Bool {
+        switch stateManager.state {
+        case .idle, .serverRunning, .error:
+            return true
+        case .serverStarting, .connecting, .recording, .processing:
+            return false
+        }
+    }
+
     // MARK: - Actions
 
     private func toggleServer() {
@@ -201,6 +219,44 @@ struct ServerControlView: View {
                 stateManager.stopServer()
             }
         }
+    }
+}
+
+struct RecordingModePromptView: View {
+    let message: String
+    let dismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "keyboard.badge.ellipsis")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Constants.UI.accentOrange)
+
+            Text(message)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Constants.UI.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 8)
+
+            Button(action: dismiss) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Constants.UI.textSecondary.opacity(0.8))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss recording mode prompt")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Constants.UI.surfaceDark.opacity(0.8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Constants.UI.accentOrange.opacity(0.25), lineWidth: 1)
+                )
+        )
     }
 }
 

@@ -48,6 +48,21 @@ struct SimpleTestView: View {
                         .font(.system(size: 12))
                         .foregroundStyle(Constants.UI.textSecondary.opacity(0.8))
                 }
+
+                if let diagnosticDetails = stateManager.lastDiagnosticErrorDetails, !diagnosticDetails.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Last runtime error (debug)")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Constants.UI.recordingRed)
+
+                        Text(diagnosticDetails)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(Constants.UI.textSecondary.opacity(0.9))
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.top, 4)
+                }
             }
             .padding(12)
             .background(Constants.UI.surfaceDark)

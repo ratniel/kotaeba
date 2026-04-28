@@ -181,7 +181,7 @@ class TextInserter {
         simulatePaste()
         
         // Restore previous clipboard after paste has had a chance to consume it.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.30) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) {
             guard pasteboard.changeCount == insertionChangeCount else {
                 Log.textInsertion.debug("Skipping clipboard restore because clipboard changed after insertion")
                 return

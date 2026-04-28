@@ -1,11 +1,19 @@
 #!/bin/bash
 # Kotaeba Setup Script
-# Installs uv, creates venv, and installs dependencies
+# Syncs the locked fallback runtime used when no bundled app runtime is present.
 
 set -e  # Exit on error
 
 SUPPORT_DIR="$HOME/Library/Application Support/Kotaeba"
 VENV_DIR="$SUPPORT_DIR/.venv"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RUNTIME_PROJECT_DIR="$SCRIPT_DIR/PythonRuntime"
+
+if [[ ! -f "$RUNTIME_PROJECT_DIR/pyproject.toml" || ! -f "$RUNTIME_PROJECT_DIR/uv.lock" ]]; then
+    if [[ -f "$SCRIPT_DIR/pyproject.toml" && -f "$SCRIPT_DIR/uv.lock" ]]; then
+        RUNTIME_PROJECT_DIR="$SCRIPT_DIR"
+    fi
+fi
 
 echo "🚀 Kotaeba Setup"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -34,28 +42,30 @@ fi
 
 echo "✅ uv package manager ready"
 
-# Create virtual environment
-echo "🐍 Creating Python virtual environment..."
-uv venv "$VENV_DIR" --python 3.11
+if [[ ! -f "$RUNTIME_PROJECT_DIR/pyproject.toml" || ! -f "$RUNTIME_PROJECT_DIR/uv.lock" ]]; then
+    echo "❌ Locked runtime project not found at: $RUNTIME_PROJECT_DIR"
+    exit 1
+fi
 
-# Activate venv
-source "$VENV_DIR/bin/activate"
-
-# Install dependencies
-echo "📚 Installing dependencies..."
+echo "🐍 Syncing locked Python runtime..."
 echo "   This may take a few minutes..."
 
-uv pip install mlx-audio mlx fastapi uvicorn websockets
+mkdir -p "$VENV_DIR"
+
+export UV_PROJECT_ENVIRONMENT="$VENV_DIR"
+
+uv sync \
+    --project "$RUNTIME_PROJECT_DIR" \
+    --locked \
+    --no-dev \
+    --no-install-project \
+    --python 3.11
 
 echo ""
 echo "✨ Setup complete!"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "Dependencies installed:"
-echo "  • mlx-audio (speech-to-text)"
-echo "  • mlx (Apple Silicon ML)"
-echo "  • fastapi (web framework)"
-echo "  • uvicorn (server)"
-echo "  • websockets (real-time communication)"
+echo "Locked runtime synced to:"
+echo "  • $VENV_DIR"
 echo ""
 echo "Kotaeba is ready to use! 🎤"

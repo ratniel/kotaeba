@@ -95,7 +95,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         modeItem.isEnabled = false
         menu.addItem(modeItem)
         
-        let hotkeyItem = NSMenuItem(title: "Hotkey: \(Constants.Hotkey.defaultDisplayString)", action: nil, keyEquivalent: "")
+        let hotkeyItem = NSMenuItem(title: "Hotkey: \(AppStateManager.shared.currentHotkey.displayString)", action: nil, keyEquivalent: "")
         hotkeyItem.isEnabled = false
         menu.addItem(hotkeyItem)
         
@@ -160,6 +160,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 } else {
                     self?.hideRecordingBar()
                 }
+            }
+            .store(in: &cancellables)
+
+        AppStateManager.shared.$currentHotkey
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.updateMenu()
             }
             .store(in: &cancellables)
     }
