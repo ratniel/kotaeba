@@ -50,10 +50,11 @@ class AppStateManager: ObservableObject {
     
     private var serverManager: ServerManaging?
     private var audioCapture: (any AudioCapturing)?
-    private var webSocketClient: WebSocketClient?
+    private var webSocketClient: (any WebSocketClienting)?
     private var hotkeyManager: HotkeyManager?
     private var textInserter: TextInserter?
     private let statisticsManager: any StatisticsManaging
+    private let webSocketClientFactory: @MainActor (URL) -> any WebSocketClienting
     private var permissionRefreshTask: Task<Void, Never>?
     private var pendingWebSocketDisconnectTask: Task<Void, Never>?
     private var activeAudioSessionID: AudioCaptureSessionID?
@@ -67,6 +68,7 @@ class AppStateManager: ObservableObject {
 
     private init() {
         self.statisticsManager = StatisticsManager.shared
+        self.webSocketClientFactory = { WebSocketClient(serverURL: $0) }
         loadPreferences()
         setupComponents()
         refreshStatistics()
@@ -84,9 +86,11 @@ class AppStateManager: ObservableObject {
         audioCapture: (any AudioCapturing)? = nil,
         textInserter: TextInserter? = nil,
         statisticsManager: (any StatisticsManaging)? = nil,
+        webSocketClientFactory: @MainActor @escaping (URL) -> any WebSocketClienting = { WebSocketClient(serverURL: $0) },
         shouldAutoStartServer: Bool = false
     ) {
         self.statisticsManager = statisticsManager ?? StatisticsManager.shared
+        self.webSocketClientFactory = webSocketClientFactory
         self.serverManager = serverManager
         self.audioCapture = audioCapture
         self.textInserter = textInserter
@@ -361,9 +365,10 @@ class AppStateManager: ObservableObject {
         sessionStartTime = Date()
         
         // Connect WebSocket
-        webSocketClient = WebSocketClient(serverURL: Constants.Server.websocketURL)
-        webSocketClient?.delegate = self
-        webSocketClient?.connect()
+        let client = webSocketClientFactory(Constants.Server.websocketURL)
+        webSocketClient = client
+        client.delegate = self
+        client.connect()
     }
     
     func stopRecording() {
@@ -430,11 +435,16 @@ class AppStateManager: ObservableObject {
 
         pendingWebSocketDisconnectTask = Task { [weak self, weak client] in
             try? await Task.sleep(nanoseconds: 1_200_000_000)
-            guard let self, let client, self.webSocketClient === client else { return }
+            guard let self, let client, self.isCurrentWebSocketClient(client) else { return }
             self.webSocketClient?.disconnect()
             self.webSocketClient = nil
             self.pendingWebSocketDisconnectTask = nil
         }
+    }
+
+    private func isCurrentWebSocketClient(_ client: any WebSocketClienting) -> Bool {
+        guard let webSocketClient else { return false }
+        return client === webSocketClient
     }
     
     func toggleRecording() {
@@ -748,9 +758,9 @@ class AppStateManager: ObservableObject {
 
 extension AppStateManager: WebSocketClientDelegate {
     
-    nonisolated func webSocketDidConnect(_ client: WebSocketClient) {
+    nonisolated func webSocketDidConnect(_ client: any WebSocketClienting) {
         Task { @MainActor in
-            guard client === webSocketClient else {
+            guard isCurrentWebSocketClient(client) else {
                 Log.websocket.debug("Ignoring connect callback from stale WebSocket client")
                 return
             }
@@ -759,7 +769,7 @@ extension AppStateManager: WebSocketClientDelegate {
 
             // Send configuration with selected model
             let config = ClientConfig.with(model: selectedModel.identifier)
-            webSocketClient?.sendConfiguration(config)
+            client.sendConfiguration(config)
 
             // Start audio capture
             do {
@@ -768,15 +778,17 @@ extension AppStateManager: WebSocketClientDelegate {
             } catch {
                 Log.audio.error("Failed to start audio: \(error)")
                 state = .error(error.localizedDescription)
-                webSocketClient?.disconnect()
-                webSocketClient = nil
+                if isCurrentWebSocketClient(client) {
+                    webSocketClient?.disconnect()
+                    webSocketClient = nil
+                }
             }
         }
     }
     
-    nonisolated func webSocketDidDisconnect(_ client: WebSocketClient, error: Error?) {
+    nonisolated func webSocketDidDisconnect(_ client: any WebSocketClienting, error: Error?) {
         Task { @MainActor in
-            guard client === webSocketClient else {
+            guard isCurrentWebSocketClient(client) else {
                 Log.websocket.debug("Ignoring disconnect callback from stale WebSocket client")
                 return
             }
@@ -795,9 +807,9 @@ extension AppStateManager: WebSocketClientDelegate {
         }
     }
     
-    nonisolated func webSocketDidReceiveTranscription(_ client: WebSocketClient, transcription: ServerTranscription) {
+    nonisolated func webSocketDidReceiveTranscription(_ client: any WebSocketClienting, transcription: ServerTranscription) {
         Task { @MainActor in
-            guard client === webSocketClient else {
+            guard isCurrentWebSocketClient(client) else {
                 Log.websocket.debug("Ignoring transcription from stale WebSocket client")
                 return
             }
@@ -805,9 +817,9 @@ extension AppStateManager: WebSocketClientDelegate {
         }
     }
     
-    nonisolated func webSocketDidReceiveStatus(_ client: WebSocketClient, status: ServerStatus) {
+    nonisolated func webSocketDidReceiveStatus(_ client: any WebSocketClienting, status: ServerStatus) {
         Task { @MainActor in
-            guard client === webSocketClient else {
+            guard isCurrentWebSocketClient(client) else {
                 Log.websocket.debug("Ignoring status from stale WebSocket client")
                 return
             }
