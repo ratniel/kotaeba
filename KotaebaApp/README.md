@@ -58,6 +58,20 @@ xcodebuild test -project KotaebaApp/KotaebaApp.xcodeproj -scheme KotaebaApp -des
 
 Use the install script for user-facing manual testing because it installs the same app path that macOS permissions attach to.
 
+## Navigating The App
+
+The app is organized around a few core surfaces:
+
+- Menu bar item: the quickest way to open the app, check whether the server is ready, or quit
+- Main window: server controls, recording mode, model selection, statistics, and history
+- Settings tabs:
+  - General
+  - Hotkey
+  - Audio
+  - Transcription
+  - About
+- Recording bar: the transient overlay shown during active dictation
+
 ## Implemented Capabilities
 
 - Global hotkey configuration from Settings
@@ -67,25 +81,6 @@ Use the install script for user-facing manual testing because it installs the sa
 - Microphone device list, persisted selection, and migration support
 - Model preflight state, download status, and custom model validation
 - Persisted transcription sessions, insertion metadata, and aggregate statistics
-
-## Release Verification Snapshot
-
-Manually exercised during the current release pass:
-
-- [x] Hotkey settings
-- [x] Basic recording cycle
-- [x] Text insertion reliability
-- [x] Microphone selection
-- [x] Model catalog flow
-- [x] Permissions flow
-- [x] Stats sanity check
-
-Still worth manually confirming on the merged `main` build before tagging a release:
-
-- [ ] History preservation when canceling after a completed final transcript
-- [ ] Relaunch and persistence of selected settings
-- [ ] Fresh-install smoke test
-- [ ] Long-dictation lock feel versus intended gesture semantics
 
 ## Automated Coverage
 

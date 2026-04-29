@@ -2,7 +2,7 @@
 
 Kotaeba is a local-first speech-to-text app for macOS. It combines a native Swift/SwiftUI menu bar client with a Python transcription runtime so you can start dictation from a global hotkey and insert text into other apps.
 
-## What Is On `main`
+## Features
 
 The current `main` branch includes these merged features:
 
@@ -15,6 +15,57 @@ The current `main` branch includes these merged features:
 - Bundled model catalog with custom Hugging Face model validation
 - Transcription history with persisted session metadata
 - Usage statistics and recent-session views
+
+## Install
+
+If you want to install the local app from this repo:
+
+```bash
+uv sync
+scripts/install_local_app.sh --clean
+```
+
+That builds and installs the app to `/Applications/KotaebaApp.app`.
+
+If macOS permission prompts appear on first launch, allow:
+
+- Microphone access
+- Accessibility access
+
+## Using The App
+
+Kotaeba lives in the macOS menu bar.
+
+### First Run
+
+1. Launch `KotaebaApp`
+2. Complete the onboarding and permission flow
+3. Wait for the local server to become ready
+4. Press the configured hotkey to start dictation
+
+### Main Areas
+
+- Menu bar item: open the app, check status, and quit
+- Main window: server status, recording mode, model selection, statistics, and recent history
+- Settings: general options, hotkey, audio input, and transcription/model controls
+- Recording bar: appears while recording and shows live activity
+
+### Basic Flow
+
+1. Choose your preferred recording mode
+2. Pick the microphone you want to use
+3. Select a bundled model or validate a custom Hugging Face model
+4. Place the cursor in the target app
+5. Press the hotkey and speak
+6. Let Kotaeba insert the final text at the cursor
+
+### Where To Look In The App
+
+- `Settings > Hotkey`: configure the global shortcut
+- `Settings > Audio`: choose the microphone
+- `Settings > Transcription`: choose bundled or custom models
+- Main window History area: review recent transcription sessions
+- Main window Statistics area: see usage totals and recent activity
 
 ## Architecture
 
@@ -34,7 +85,7 @@ Global Hotkey
   -> text insertion / history / statistics
 ```
 
-## Local Workflows
+## Development
 
 Common commands:
 
@@ -45,27 +96,6 @@ scripts/run_app.sh
 scripts/install_local_app.sh --clean
 xcodebuild test -project KotaebaApp/KotaebaApp.xcodeproj -scheme KotaebaApp -destination 'platform=macOS'
 ```
-
-Use `scripts/install_local_app.sh --clean` when you want to test the installed app at `/Applications/KotaebaApp.app`.
-
-## Release Candidate Verification
-
-These items have been manually exercised during the current release pass:
-
-- [x] Configurable hotkey settings
-- [x] Basic recording start/stop flow
-- [x] Text insertion reliability across common apps
-- [x] Microphone selection
-- [x] Model catalog and selection flow
-- [x] Permissions flow
-- [x] Statistics updates look sane against recent usage
-
-These items should still be manually re-checked before cutting a versioned release:
-
-- [ ] Cancel after a completed final transcript now preserves History
-- [ ] App relaunch and persisted state after the merged `main` build
-- [ ] Clean from-scratch install smoke test
-- [ ] Long-dictation lock gesture semantics for your intended `hold Ctrl + double-tap X` flow
 
 ## Automated Validation
 
