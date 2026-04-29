@@ -18,14 +18,18 @@ The current `main` branch includes these merged features:
 
 ## Install
 
-If you want to install the local app from this repo:
+### For Most People
+
+Download the latest `.dmg` from the GitHub Releases page, open it, and move `KotaebaApp.app` into `/Applications`.
+
+### For Developers
 
 ```bash
 uv sync
 scripts/install_local_app.sh --clean
 ```
 
-That builds and installs the app to `/Applications/KotaebaApp.app`.
+This builds and installs the app locally to `/Applications/KotaebaApp.app`.
 
 If macOS permission prompts appear on first launch, allow:
 
