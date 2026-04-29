@@ -13,6 +13,10 @@ protocol StatisticsManaging: AnyObject {
         duration: TimeInterval,
         text: String?,
         language: String,
+        modelIdentifier: String?,
+        insertionMethod: String?,
+        insertionError: String?,
+        sourceAppName: String?,
         now: Date
     ) -> StatisticsSnapshot
     func getAggregatedStats() -> AggregatedStats
@@ -29,6 +33,10 @@ fileprivate struct StatisticsSessionRecord {
     let duration: TimeInterval
     let transcribedText: String?
     let language: String
+    let modelIdentifier: String?
+    let insertionMethod: String?
+    let insertionError: String?
+    let sourceAppName: String?
 
     init(
         id: UUID = UUID(),
@@ -37,7 +45,11 @@ fileprivate struct StatisticsSessionRecord {
         wordCount: Int,
         duration: TimeInterval,
         transcribedText: String?,
-        language: String
+        language: String,
+        modelIdentifier: String?,
+        insertionMethod: String?,
+        insertionError: String?,
+        sourceAppName: String?
     ) {
         self.id = id
         self.startTime = startTime
@@ -46,6 +58,10 @@ fileprivate struct StatisticsSessionRecord {
         self.duration = duration
         self.transcribedText = transcribedText
         self.language = language
+        self.modelIdentifier = modelIdentifier
+        self.insertionMethod = insertionMethod
+        self.insertionError = insertionError
+        self.sourceAppName = sourceAppName
     }
 
     init(session: TranscriptionSession) {
@@ -56,7 +72,11 @@ fileprivate struct StatisticsSessionRecord {
             wordCount: session.wordCount,
             duration: session.duration,
             transcribedText: session.transcribedText,
-            language: session.language
+            language: session.language,
+            modelIdentifier: session.modelIdentifier,
+            insertionMethod: session.insertionMethod,
+            insertionError: session.insertionError,
+            sourceAppName: session.sourceAppName
         )
     }
 
@@ -68,7 +88,11 @@ fileprivate struct StatisticsSessionRecord {
             wordCount: wordCount,
             duration: duration,
             transcribedText: transcribedText,
-            language: language
+            language: language,
+            modelIdentifier: modelIdentifier,
+            insertionMethod: insertionMethod,
+            insertionError: insertionError,
+            sourceAppName: sourceAppName
         )
     }
 }
@@ -244,6 +268,10 @@ final class StatisticsManager: StatisticsManaging {
         duration: TimeInterval,
         text: String? = nil,
         language: String = "en",
+        modelIdentifier: String? = nil,
+        insertionMethod: String? = nil,
+        insertionError: String? = nil,
+        sourceAppName: String? = nil,
         now: Date = Date()
     ) -> StatisticsSnapshot {
         let session = StatisticsSessionRecord(
@@ -252,7 +280,11 @@ final class StatisticsManager: StatisticsManaging {
             wordCount: wordCount,
             duration: duration,
             transcribedText: text,
-            language: language
+            language: language,
+            modelIdentifier: modelIdentifier,
+            insertionMethod: insertionMethod,
+            insertionError: insertionError,
+            sourceAppName: sourceAppName
         )
 
         guard store.save(session) else {

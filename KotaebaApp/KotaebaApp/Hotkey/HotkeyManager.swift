@@ -34,6 +34,7 @@ class HotkeyManager {
     
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
+    private var runLoop: CFRunLoop?
     private var processor: HotkeyProcessor
     private var shortcut: HotkeyShortcut
     private(set) var isRunning = false
@@ -95,7 +96,10 @@ class HotkeyManager {
         
         eventTap = tap
         runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
+        runLoop = CFRunLoopGetCurrent()
+        if let runLoopSource, let runLoop {
+            CFRunLoopAddSource(runLoop, runLoopSource, .commonModes)
+        }
         CGEvent.tapEnable(tap: tap, enable: true)
         isRunning = true
         
@@ -105,16 +109,19 @@ class HotkeyManager {
     
     /// Stop listening for hotkey events
     func stop() {
+        processor.reset()
+
+        if let source = runLoopSource, let runLoop {
+            CFRunLoopRemoveSource(runLoop, source, .commonModes)
+        }
         if let tap = eventTap {
             CGEvent.tapEnable(tap: tap, enable: false)
-        }
-        if let source = runLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, .commonModes)
+            CFMachPortInvalidate(tap)
         }
         eventTap = nil
         runLoopSource = nil
+        runLoop = nil
         isRunning = false
-        processor.reset()
         Log.hotkey.info("Event tap stopped")
     }
     
@@ -138,6 +145,7 @@ class HotkeyManager {
 
     private func processorInput(for type: CGEventType, event: CGEvent) -> HotkeyProcessorInput {
         let timestamp = TimeInterval(event.timestamp) / 1_000_000_000
+
         switch type {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
             return .tapDisabled(timestamp: timestamp)

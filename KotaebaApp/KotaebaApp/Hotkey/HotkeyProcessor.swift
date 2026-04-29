@@ -14,12 +14,14 @@ struct HotkeyConfiguration: Equatable {
     var requiredModifiers: HotkeyModifiers
     var escapeKeyCode: UInt16
     var minimumHoldDuration: TimeInterval
+    var doubleTapLockWindow: TimeInterval
 
     static let `default` = HotkeyConfiguration(
         keyCode: Constants.Hotkey.defaultKeyCode,
         requiredModifiers: .control,
         escapeKeyCode: Constants.Hotkey.escapeKeyCode,
-        minimumHoldDuration: Constants.Hotkey.minimumHoldDuration
+        minimumHoldDuration: Constants.Hotkey.minimumHoldDuration,
+        doubleTapLockWindow: Constants.Hotkey.doubleTapLockWindow
     )
 }
 
@@ -109,8 +111,11 @@ struct HotkeyProcessor {
     enum State: Equatable {
         case idle
         case holdRecording(startedAt: TimeInterval)
+        case awaitingSecondTap(firstTapEndedAt: TimeInterval)
+        case doubleTapRecording(startedAt: TimeInterval)
         case toggleKeyPressed(wasLocked: Bool)
         case lockedRecording
+        case lockedStopKeyPressed
         case cancelledWaitingForRelease
         case dirtyWaitingForRelease
     }
@@ -127,6 +132,8 @@ struct HotkeyProcessor {
     }
 
     mutating func handle(_ input: HotkeyProcessorInput, recordingMode: RecordingMode) -> HotkeyProcessorResult {
+        expireDoubleTapWindowIfNeeded(at: input.timestamp)
+
         switch input.kind {
         case .tapDisabled:
             return handleTapDisabled()
@@ -141,15 +148,21 @@ struct HotkeyProcessor {
 
     private mutating func handleTapDisabled() -> HotkeyProcessorResult {
         switch state {
-        case .holdRecording:
+        case .holdRecording, .doubleTapRecording:
             state = .dirtyWaitingForRelease
             return HotkeyProcessorResult(actions: [.cancelRecording, .reenableEventTap], shouldConsumeEvent: false)
+        case .lockedRecording, .lockedStopKeyPressed:
+            state = .idle
+            return HotkeyProcessorResult(actions: [.cancelRecording, .reenableEventTap], shouldConsumeEvent: false)
+        case .awaitingSecondTap:
+            state = .idle
+            return HotkeyProcessorResult(actions: [.reenableEventTap], shouldConsumeEvent: false)
         case .toggleKeyPressed:
             state = .dirtyWaitingForRelease
             return HotkeyProcessorResult(actions: [.reenableEventTap], shouldConsumeEvent: false)
         case .cancelledWaitingForRelease, .dirtyWaitingForRelease:
             return HotkeyProcessorResult(actions: [.reenableEventTap], shouldConsumeEvent: false)
-        case .idle, .lockedRecording:
+        case .idle:
             return HotkeyProcessorResult(actions: [.reenableEventTap], shouldConsumeEvent: false)
         }
     }
@@ -158,10 +171,17 @@ struct HotkeyProcessor {
         if requiredModifiersAreReleased(input.modifiers) {
             switch state {
             case .holdRecording(let startedAt):
+                return holdCompletionResult(startedAt: startedAt, endedAt: input.timestamp, shouldConsumeEvent: false)
+            case .doubleTapRecording:
+                state = .lockedRecording
+                return .passThrough
+            case .lockedStopKeyPressed:
                 state = .idle
-                return completionResult(startedAt: startedAt, endedAt: input.timestamp, shouldConsumeEvent: false)
+                return HotkeyProcessorResult(actions: [.stopRecording], shouldConsumeEvent: false)
             case .toggleKeyPressed:
                 state = .idle
+                return .passThrough
+            case .awaitingSecondTap:
                 return .passThrough
             case .cancelledWaitingForRelease, .dirtyWaitingForRelease:
                 state = .idle
@@ -185,10 +205,12 @@ struct HotkeyProcessor {
         }
 
         guard keyCode == configuration.keyCode else {
+            clearPendingDoubleTap()
             return .passThrough
         }
 
         guard exactRequiredModifiersArePressed(input.modifiers) else {
+            clearPendingDoubleTap()
             return .passThrough
         }
 
@@ -202,21 +224,27 @@ struct HotkeyProcessor {
             case .idle:
                 state = .holdRecording(startedAt: input.timestamp)
                 return HotkeyProcessorResult(actions: [.startRecording], shouldConsumeEvent: true)
-            case .holdRecording, .cancelledWaitingForRelease, .dirtyWaitingForRelease:
+            case .awaitingSecondTap:
+                state = .doubleTapRecording(startedAt: input.timestamp)
+                return HotkeyProcessorResult(actions: [.startRecording], shouldConsumeEvent: true)
+            case .lockedRecording:
+                state = .lockedStopKeyPressed
                 return .consume
-            case .toggleKeyPressed, .lockedRecording:
+            case .holdRecording, .doubleTapRecording, .lockedStopKeyPressed, .cancelledWaitingForRelease, .dirtyWaitingForRelease:
+                return .consume
+            case .toggleKeyPressed:
                 state = .holdRecording(startedAt: input.timestamp)
                 return HotkeyProcessorResult(actions: [.startRecording], shouldConsumeEvent: true)
             }
         case .toggle:
             switch state {
-            case .idle:
+            case .idle, .awaitingSecondTap:
                 state = .toggleKeyPressed(wasLocked: false)
                 return .consume
             case .lockedRecording:
                 state = .toggleKeyPressed(wasLocked: true)
                 return .consume
-            case .toggleKeyPressed, .holdRecording, .cancelledWaitingForRelease, .dirtyWaitingForRelease:
+            case .toggleKeyPressed, .holdRecording, .doubleTapRecording, .lockedStopKeyPressed, .cancelledWaitingForRelease, .dirtyWaitingForRelease:
                 return .consume
             }
         }
@@ -232,8 +260,13 @@ struct HotkeyProcessor {
 
         switch state {
         case .holdRecording(let startedAt):
+            return holdCompletionResult(startedAt: startedAt, endedAt: input.timestamp, shouldConsumeEvent: true)
+        case .doubleTapRecording:
+            state = .lockedRecording
+            return .consume
+        case .lockedStopKeyPressed:
             state = .idle
-            return completionResult(startedAt: startedAt, endedAt: input.timestamp, shouldConsumeEvent: true)
+            return HotkeyProcessorResult(actions: [.stopRecording], shouldConsumeEvent: true)
         case .toggleKeyPressed(let wasLocked):
             if recordingMode == .toggle {
                 state = wasLocked ? .idle : .lockedRecording
@@ -245,6 +278,8 @@ struct HotkeyProcessor {
         case .cancelledWaitingForRelease, .dirtyWaitingForRelease:
             state = .idle
             return .consume
+        case .awaitingSecondTap:
+            return exactRequiredModifiersArePressed(input.modifiers) ? .consume : .passThrough
         case .idle:
             return exactRequiredModifiersArePressed(input.modifiers) ? .consume : .passThrough
         case .lockedRecording:
@@ -254,12 +289,15 @@ struct HotkeyProcessor {
 
     private mutating func handleEscapeKeyDown() -> HotkeyProcessorResult {
         switch state {
-        case .holdRecording:
+        case .holdRecording, .doubleTapRecording, .lockedStopKeyPressed:
             state = .cancelledWaitingForRelease
             return HotkeyProcessorResult(actions: [.cancelRecording], shouldConsumeEvent: true)
         case .lockedRecording:
             state = .idle
             return HotkeyProcessorResult(actions: [.cancelRecording], shouldConsumeEvent: true)
+        case .awaitingSecondTap:
+            state = .idle
+            return .consume
         case .toggleKeyPressed:
             state = .cancelledWaitingForRelease
             return .consume
@@ -282,9 +320,43 @@ struct HotkeyProcessor {
         return HotkeyProcessorResult(actions: [action], shouldConsumeEvent: shouldConsumeEvent)
     }
 
+    private mutating func holdCompletionResult(
+        startedAt: TimeInterval,
+        endedAt: TimeInterval,
+        shouldConsumeEvent: Bool
+    ) -> HotkeyProcessorResult {
+        let result = completionResult(
+            startedAt: startedAt,
+            endedAt: endedAt,
+            shouldConsumeEvent: shouldConsumeEvent
+        )
+        state = result.actions == [.cancelRecording]
+            ? .awaitingSecondTap(firstTapEndedAt: endedAt)
+            : .idle
+        return result
+    }
+
+    private mutating func expireDoubleTapWindowIfNeeded(at timestamp: TimeInterval) {
+        guard case .awaitingSecondTap(let firstTapEndedAt) = state else { return }
+        guard timestamp - firstTapEndedAt > configuration.doubleTapLockWindow else { return }
+        state = .idle
+    }
+
+    private mutating func clearPendingDoubleTap() {
+        guard case .awaitingSecondTap = state else { return }
+        state = .idle
+    }
+
     private var consumesTargetKeyWhileActive: Bool {
         switch state {
-        case .holdRecording, .toggleKeyPressed, .lockedRecording, .cancelledWaitingForRelease, .dirtyWaitingForRelease:
+        case .holdRecording,
+             .awaitingSecondTap,
+             .doubleTapRecording,
+             .toggleKeyPressed,
+             .lockedRecording,
+             .lockedStopKeyPressed,
+             .cancelledWaitingForRelease,
+             .dirtyWaitingForRelease:
             return true
         case .idle:
             return false

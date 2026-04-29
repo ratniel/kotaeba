@@ -11,6 +11,7 @@ import AppKit
 /// - Tracks statistics
 @MainActor
 class AppStateManager: ObservableObject {
+    private static let finalTranscriptGracePeriodNanoseconds: UInt64 = 1_200_000_000
     
     // MARK: - Singleton
     
@@ -39,31 +40,77 @@ class AppStateManager: ObservableObject {
     @Published private(set) var modelDownloadStatus: ModelDownloadStatus = .unknown
     @Published private(set) var modelDownloadError: String?
     @Published private(set) var modelDownloadProgress: Double?
+    @Published private(set) var customModels: [Constants.Models.Model] = []
+    @Published private(set) var customModelValidationStatus: CustomModelValidationStatus = .idle
+    @Published private(set) var customModelValidationError: String?
     @Published private(set) var lastDiagnosticErrorDetails: String?
     @Published private(set) var serverStartupStage: ServerStartupStage?
     @Published private(set) var aggregatedStats: AggregatedStats = .empty
     @Published private(set) var todayStats: AggregatedStats = .empty
+    var availableModels: [Constants.Models.Model] {
+        Constants.Models.mergedModels(
+            bundledModels: Constants.Models.catalog.models,
+            customModels: customModels
+        )
+    }
+    var modelPreflightState: ModelPreflightState {
+        if customModelValidationStatus.isRunning {
+            return .validatingCustomModel
+        }
+        return ModelPreflightState.resolve(appState: state, downloadStatus: modelDownloadStatus)
+    }
+    var isModelSelectionLocked: Bool {
+        modelPreflightState.locksModelSelection || state == .connecting || state == .recording
+    }
+    var modelSelectionLockMessage: String? {
+        modelPreflightState.selectionLockMessage ?? (
+            state == .connecting || state == .recording
+                ? "Stop the active recording before changing models."
+                : nil
+        )
+    }
+    @Published private(set) var recentTranscriptionSessions: [TranscriptionSession] = []
+    @Published private(set) var audioInputDevices: [AudioInputDevice] = [.systemDefault]
+    @Published private(set) var selectedAudioInputDeviceID = AudioInputDevice.systemDefaultID
     
     // MARK: - Components
     
     private var serverManager: ServerManaging?
-    private var audioCapture: AudioCaptureManager?
-    private var webSocketClient: WebSocketClient?
+    private var audioCapture: (any AudioCapturing)?
+    private var webSocketClient: (any WebSocketClienting)?
     private var hotkeyManager: HotkeyManager?
     private var textInserter: TextInserter?
     private let statisticsManager: any StatisticsManaging
+    private let webSocketClientFactory: @MainActor (URL) -> any WebSocketClienting
+    private let sourceAppNameProvider: @MainActor () -> String?
+    private let huggingFaceModelInfoProvider: (String, String?) async throws -> HuggingFaceModelInfo
+    private let huggingFaceTokenProvider: @MainActor () -> String?
     private var permissionRefreshTask: Task<Void, Never>?
     private var pendingWebSocketDisconnectTask: Task<Void, Never>?
+    private var activeAudioSessionID: AudioCaptureSessionID?
     
     // MARK: - Session Tracking
     
     private var sessionStartTime: Date?
     private var sessionWordCount: Int = 0
+    private var sessionTranscriptChunks: [String] = []
+    private var sessionLanguage: String = "en"
+    private var sessionModelIdentifier: String?
+    private var sessionInsertionMethod: String?
+    private var sessionInsertionError: String?
+    private var sessionSourceAppName: String?
+    private var pendingSessionCompletedAt: Date?
     
     // MARK: - Initialization
 
     private init() {
         self.statisticsManager = StatisticsManager.shared
+        self.webSocketClientFactory = { WebSocketClient(serverURL: $0) }
+        self.sourceAppNameProvider = { NSWorkspace.shared.frontmostApplication?.localizedName }
+        self.huggingFaceModelInfoProvider = HuggingFaceModelLookup.fetchModelInfo
+        self.huggingFaceTokenProvider = {
+            KeychainSecretStore.string(for: Constants.SecureSettingsKeys.huggingFaceToken)
+        }
         loadPreferences()
         setupComponents()
         refreshStatistics()
@@ -78,12 +125,24 @@ class AppStateManager: ObservableObject {
 
     init(
         serverManager: ServerManaging,
-        audioCapture: AudioCaptureManager? = nil,
+        audioCapture: (any AudioCapturing)? = nil,
         textInserter: TextInserter? = nil,
         statisticsManager: (any StatisticsManaging)? = nil,
+        webSocketClientFactory: @MainActor @escaping (URL) -> any WebSocketClienting = { WebSocketClient(serverURL: $0) },
+        sourceAppNameProvider: @MainActor @escaping () -> String? = {
+            NSWorkspace.shared.frontmostApplication?.localizedName
+        },
+        huggingFaceModelInfoProvider: @escaping (String, String?) async throws -> HuggingFaceModelInfo = HuggingFaceModelLookup.fetchModelInfo,
+        huggingFaceTokenProvider: @MainActor @escaping () -> String? = {
+            KeychainSecretStore.string(for: Constants.SecureSettingsKeys.huggingFaceToken)
+        },
         shouldAutoStartServer: Bool = false
     ) {
         self.statisticsManager = statisticsManager ?? StatisticsManager.shared
+        self.webSocketClientFactory = webSocketClientFactory
+        self.sourceAppNameProvider = sourceAppNameProvider
+        self.huggingFaceModelInfoProvider = huggingFaceModelInfoProvider
+        self.huggingFaceTokenProvider = huggingFaceTokenProvider
         self.serverManager = serverManager
         self.audioCapture = audioCapture
         self.textInserter = textInserter
@@ -91,6 +150,8 @@ class AppStateManager: ObservableObject {
         refreshStatistics()
         self.audioCapture?.delegate = self
         configureServerCallbacks()
+        configureAudioCallbacks()
+        refreshAudioInputDevices()
 
         if shouldAutoStartServer && !Constants.isRunningTests {
             Task {
@@ -103,10 +164,12 @@ class AppStateManager: ObservableObject {
         UserDefaults.standard.register(defaults: [
             Constants.UserDefaultsKeys.safeModeEnabled: true,
             Constants.UserDefaultsKeys.serverHost: Constants.Server.defaultHost,
-            Constants.UserDefaultsKeys.serverPort: Constants.Server.defaultPort
+            Constants.UserDefaultsKeys.serverPort: Constants.Server.defaultPort,
+            Constants.UserDefaultsKeys.selectedAudioDevice: AudioInputDevice.systemDefaultID
         ])
         SettingsMigration.migrateIfNeeded()
         currentHotkey = HotkeyShortcutStore.load()
+        customModels = CustomModelCatalogStore.loadModels()
 
         if let modeString = UserDefaults.standard.string(forKey: Constants.UserDefaultsKeys.recordingMode),
            let mode = RecordingMode(rawValue: modeString) {
@@ -115,7 +178,7 @@ class AppStateManager: ObservableObject {
 
         // Load selected model
         if let modelId = UserDefaults.standard.string(forKey: Constants.UserDefaultsKeys.selectedModel) {
-            if let model = Constants.Models.model(withIdentifier: modelId) {
+            if let model = model(withIdentifier: modelId) {
                 selectedModel = model
             } else {
                 selectedModel = Constants.Models.defaultModel
@@ -131,6 +194,8 @@ class AppStateManager: ObservableObject {
         // Set up delegates
         audioCapture?.delegate = self
         configureServerCallbacks()
+        configureAudioCallbacks()
+        refreshAudioInputDevices()
     }
 
     private func configureServerCallbacks() {
@@ -139,12 +204,19 @@ class AppStateManager: ObservableObject {
         }
     }
 
+    private func configureAudioCallbacks() {
+        audioCapture?.inputDevicesDidChange = { [weak self] in
+            Task { @MainActor in
+                self?.refreshAudioInputDevices()
+            }
+        }
+    }
+
     private func handleUnexpectedServerExit(reason: String) {
-        pendingWebSocketDisconnectTask?.cancel()
-        pendingWebSocketDisconnectTask = nil
-        audioCapture?.stopRecording()
-        webSocketClient?.disconnect()
-        webSocketClient = nil
+        cancelPendingWebSocketDisconnect()
+        stopAudioCapture()
+        disconnectCurrentWebSocket()
+        resetRecordingSession(clearCompletedTranscription: true)
         state = .error(reason)
     }
     
@@ -311,12 +383,12 @@ class AppStateManager: ObservableObject {
     }
     
     func stopServer() {
-        pendingWebSocketDisconnectTask?.cancel()
-        pendingWebSocketDisconnectTask = nil
+        cancelPendingWebSocketDisconnect()
         clearRecordingModePrompt()
-        webSocketClient?.disconnect()
-        webSocketClient = nil
-        audioCapture?.stopRecording()
+        stopAudioCapture()
+        finalizePendingRecordingSessionIfNeeded()
+        disconnectCurrentWebSocket()
+        resetRecordingSession(clearCompletedTranscription: true)
         serverManager?.stop()
         serverStartupStage = nil
         state = .idle
@@ -332,49 +404,46 @@ class AppStateManager: ObservableObject {
             return
         }
 
-        pendingWebSocketDisconnectTask?.cancel()
-        pendingWebSocketDisconnectTask = nil
+        cancelPendingWebSocketDisconnect()
         clearRecordingModePrompt()
-        webSocketClient?.disconnect()
-        webSocketClient = nil
+        finalizePendingRecordingSessionIfNeeded()
+        stopAudioCapture()
+        disconnectCurrentWebSocket()
         
         state = .connecting
         currentTranscription = ""
         lastCompletedTranscription = nil
         sessionWordCount = 0
         sessionStartTime = Date()
+        sessionTranscriptChunks = []
+        sessionLanguage = "en"
+        sessionModelIdentifier = selectedModel.identifier
+        sessionInsertionMethod = nil
+        sessionInsertionError = nil
+        sessionSourceAppName = nil
+        pendingSessionCompletedAt = nil
         
         // Connect WebSocket
-        webSocketClient = WebSocketClient(serverURL: Constants.Server.websocketURL)
-        webSocketClient?.delegate = self
-        webSocketClient?.connect()
+        let client = webSocketClientFactory(Constants.Server.websocketURL)
+        webSocketClient = client
+        client.delegate = self
+        client.connect()
     }
     
     func stopRecording() {
         Log.app.info("stopRecording requested (state: \(state), mode: \(recordingMode))")
         guard state == .recording || state == .connecting else { return }
         
-        // Stop audio first
-        audioCapture?.stopRecording()
+        // Stop audio first so no new buffers are sent during final-transcript grace.
+        stopAudioCapture()
 
-        scheduleWebSocketDisconnectAfterFinalTranscriptGrace()
-        
-        // Save session statistics
-        if let startTime = sessionStartTime {
-            let completedAt = Date()
-            let duration = completedAt.timeIntervalSince(startTime)
-            let snapshot = statisticsManager.recordSession(
-                wordCount: sessionWordCount,
-                duration: duration,
-                text: nil,
-                language: "en",
-                now: completedAt
-            )
-            applyStatistics(snapshot)
+        pendingSessionCompletedAt = Date()
+        if webSocketClient != nil {
+            scheduleWebSocketDisconnectAfterFinalTranscriptGrace()
+        } else {
+            finalizePendingRecordingSessionIfNeeded()
         }
-        
-        // Reset
-        sessionStartTime = nil
+
         currentTranscription = ""
         audioAmplitude = 0.0
         
@@ -386,33 +455,101 @@ class AppStateManager: ObservableObject {
         Log.app.info("cancelRecording requested (state: \(state), mode: \(recordingMode))")
         guard state == .recording || state == .connecting else { return }
 
-        pendingWebSocketDisconnectTask?.cancel()
-        pendingWebSocketDisconnectTask = nil
-        audioCapture?.stopRecording()
-        webSocketClient?.disconnect()
-        webSocketClient = nil
+        cancelPendingWebSocketDisconnect()
+        stopAudioCapture()
+        disconnectCurrentWebSocket()
 
-        sessionStartTime = nil
-        sessionWordCount = 0
-        currentTranscription = ""
-        lastCompletedTranscription = nil
-        audioAmplitude = 0.0
+        resetRecordingSession(clearCompletedTranscription: true)
 
         state = .serverRunning
         Log.app.info("Recording cancelled")
     }
 
-    private func scheduleWebSocketDisconnectAfterFinalTranscriptGrace() {
+    private func cancelPendingWebSocketDisconnect() {
         pendingWebSocketDisconnectTask?.cancel()
+        pendingWebSocketDisconnectTask = nil
+    }
+
+    private func stopAudioCapture() {
+        audioCapture?.stopRecording()
+        activeAudioSessionID = nil
+        audioAmplitude = 0.0
+    }
+
+    private func disconnectCurrentWebSocket() {
+        webSocketClient?.disconnect()
+        webSocketClient = nil
+    }
+
+    private func resetRecordingSession(clearCompletedTranscription: Bool) {
+        sessionStartTime = nil
+        sessionWordCount = 0
+        sessionTranscriptChunks = []
+        sessionLanguage = "en"
+        sessionModelIdentifier = nil
+        sessionInsertionMethod = nil
+        sessionInsertionError = nil
+        sessionSourceAppName = nil
+        pendingSessionCompletedAt = nil
+        currentTranscription = ""
+        audioAmplitude = 0.0
+        activeAudioSessionID = nil
+        if clearCompletedTranscription {
+            lastCompletedTranscription = nil
+        }
+    }
+
+    private func isCurrentWebSocketClient(_ client: any WebSocketClienting) -> Bool {
+        guard let webSocketClient else { return false }
+        return client === webSocketClient
+    }
+
+    private func scheduleWebSocketDisconnectAfterFinalTranscriptGrace() {
+        cancelPendingWebSocketDisconnect()
         guard let client = webSocketClient else { return }
 
-        pendingWebSocketDisconnectTask = Task { [weak self, weak client] in
-            try? await Task.sleep(nanoseconds: 1_200_000_000)
-            guard let self, let client, self.webSocketClient === client else { return }
-            self.webSocketClient?.disconnect()
-            self.webSocketClient = nil
+        pendingWebSocketDisconnectTask = Task { @MainActor [weak self, weak client] in
+            do {
+                try await Task.sleep(nanoseconds: Self.finalTranscriptGracePeriodNanoseconds)
+            } catch {
+                return
+            }
+            guard let self, let client, self.isCurrentWebSocketClient(client) else { return }
+            self.finalizePendingRecordingSessionIfNeeded()
+            self.disconnectCurrentWebSocket()
             self.pendingWebSocketDisconnectTask = nil
         }
+    }
+
+    private func finalizePendingRecordingSessionIfNeeded() {
+        guard let startTime = sessionStartTime, let completedAt = pendingSessionCompletedAt else { return }
+
+        let duration = max(0, completedAt.timeIntervalSince(startTime))
+        let transcript = combinedSessionTranscript()
+        let snapshot = statisticsManager.recordSession(
+            wordCount: sessionWordCount,
+            duration: duration,
+            text: transcript,
+            language: sessionLanguage,
+            modelIdentifier: sessionModelIdentifier,
+            insertionMethod: sessionInsertionMethod,
+            insertionError: sessionInsertionError,
+            sourceAppName: sessionSourceAppName,
+            now: completedAt
+        )
+        applyStatistics(snapshot)
+        resetRecordingSession(clearCompletedTranscription: false)
+    }
+
+    private func combinedSessionTranscript() -> String? {
+        let text = sessionTranscriptChunks
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
+    }
+
+    private func currentSourceAppName() -> String? {
+        sourceAppNameProvider()
     }
     
     func toggleRecording() {
@@ -428,14 +565,21 @@ class AppStateManager: ObservableObject {
         applyStatistics(statisticsManager.refreshSnapshot(currentDate: currentDate))
     }
 
+    func clearTranscriptionHistory(currentDate: Date = Date()) {
+        applyStatistics(statisticsManager.clearAllData(currentDate: currentDate))
+    }
+
     private func applyStatistics(_ snapshot: StatisticsSnapshot) {
         aggregatedStats = snapshot.total
         todayStats = snapshot.today
+        recentTranscriptionSessions = statisticsManager.getRecentSessions(limit: 20)
     }
     
     // MARK: - Transcription Handling
     
-    private func handleTranscription(_ text: String, isPartial: Bool) {
+    private func handleTranscription(_ transcription: ServerTranscription) {
+        let text = transcription.text
+        let isPartial = transcription.isPartial
         let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedText.isEmpty else {
             Log.app.warning("Received empty transcription, ignoring")
@@ -451,21 +595,30 @@ class AppStateManager: ObservableObject {
         // The server sends transcription after each speech pause (via VAD)
         if !isPartial {
             lastCompletedTranscription = trimmedText
+            sessionTranscriptChunks.append(trimmedText)
+            if let language = transcription.language, !language.isEmpty {
+                sessionLanguage = language
+            }
 
             // Count words
-            let wordCount = trimmedText.split(separator: " ").count
+            let wordCount = trimmedText.split(whereSeparator: { $0.isWhitespace }).count
             sessionWordCount += wordCount
 
             logInsertionAttempt(wordCount: wordCount, textLength: trimmedText.count)
-            
+
+            captureSessionSourceAppAtInsertionTime()
+
             // Insert text at cursor
             if let inserter = textInserter {
                 let insertionText = sanitizeForInsertion(trimmedText) + " "
-                performInsertion(text: insertionText, inserter: inserter)
+                let result = performInsertion(text: insertionText, inserter: inserter)
+                recordSessionInsertionResult(result)
             } else {
                 Log.textInsertion.error("TextInserter is nil. Cannot insert text.")
                 lastInsertionError = "Text inserter not initialized."
                 lastInsertionMethod = nil
+                sessionInsertionMethod = nil
+                sessionInsertionError = lastInsertionError
             }
         } else {
             Log.app.debug("Partial transcription received, waiting for final...")
@@ -480,10 +633,10 @@ class AppStateManager: ObservableObject {
             lastInsertionMethod = nil
             return
         }
-        performInsertion(text: sanitizeForInsertion(text), inserter: inserter)
+        _ = performInsertion(text: sanitizeForInsertion(text), inserter: inserter)
     }
 
-    private func performInsertion(text: String, inserter: TextInserter) {
+    private func performInsertion(text: String, inserter: TextInserter) -> TextInsertionResult {
         let result = inserter.insertText(text)
         switch result {
         case .success(let method):
@@ -495,13 +648,39 @@ class AppStateManager: ObservableObject {
             lastInsertionMethod = nil
             Log.textInsertion.error("Text insertion failed: \(error.localizedDescription)")
         }
+        return result
+    }
+
+    private func recordSessionInsertionResult(_ result: TextInsertionResult) {
+        switch result {
+        case .success(let method):
+            if sessionInsertionError == nil {
+                sessionInsertionMethod = method.rawValue
+            }
+        case .failure(let error):
+            sessionInsertionMethod = nil
+            if sessionInsertionError == nil {
+                sessionInsertionError = error.localizedDescription
+            }
+        }
+    }
+
+    private func captureSessionSourceAppAtInsertionTime() {
+        guard let sourceAppName = currentSourceAppName()?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !sourceAppName.isEmpty else {
+            return
+        }
+        sessionSourceAppName = sourceAppName
     }
 
     private func sanitizeForInsertion(_ text: String) -> String {
         let isSafeModeEnabled = UserDefaults.standard.bool(forKey: Constants.UserDefaultsKeys.safeModeEnabled)
-        guard isSafeModeEnabled else { return text }
-        let sanitized = text.components(separatedBy: .newlines).joined(separator: " ")
-        return sanitized
+        return Self.sanitizeForInsertion(text, safeModeEnabled: isSafeModeEnabled)
+    }
+
+    static func sanitizeForInsertion(_ text: String, safeModeEnabled: Bool) -> String {
+        guard safeModeEnabled else { return text }
+        return text.components(separatedBy: .newlines).joined(separator: " ")
     }
 
     private func logTranscription(_ text: String, isPartial: Bool) {
@@ -522,19 +701,33 @@ class AppStateManager: ObservableObject {
     
     // MARK: - Model Management
 
+    private func model(withIdentifier identifier: String) -> Constants.Models.Model? {
+        let normalizedIdentifier = Constants.Models.normalizedIdentifier(identifier)
+        return availableModels.first { $0.identifier == normalizedIdentifier }
+    }
+
     func checkModelDownloadStatus() async {
         if modelDownloadStatus == .downloading {
             return
         }
 
+        let modelIdentifier = selectedModel.identifier
         modelDownloadStatus = .checking
 
         do {
-            let isDownloaded = try await serverManager?.checkModelExists(selectedModel.identifier) ?? false
+            let isDownloaded = try await serverManager?.checkModelExists(modelIdentifier) ?? false
+            guard selectedModel.identifier == modelIdentifier else {
+                Log.server.debug("Ignoring model status result for stale model \(modelIdentifier)")
+                return
+            }
             modelDownloadStatus = isDownloaded ? .downloaded : .notDownloaded
             modelDownloadError = nil
             modelDownloadProgress = nil
         } catch {
+            guard selectedModel.identifier == modelIdentifier else {
+                Log.server.debug("Ignoring model status error for stale model \(modelIdentifier): \(error.localizedDescription)")
+                return
+            }
             Log.server.error("Failed to check model status: \(error)")
             modelDownloadStatus = .unknown
             modelDownloadError = error.localizedDescription
@@ -545,6 +738,18 @@ class AppStateManager: ObservableObject {
     func setSelectedModel(_ model: Constants.Models.Model) async {
         guard model.identifier != selectedModel.identifier else {
             return
+        }
+        guard !modelPreflightState.locksModelSelection else {
+            Log.server.info(
+                "Ignoring model change to \(model.identifier) while model preflight is locked: \(modelPreflightState)"
+            )
+            return
+        }
+
+        let wasActive = state == .recording || state == .connecting
+        if wasActive {
+            cancelRecording()
+            Log.app.info("Model changed while active; stopped recording before switching to \(model.name)")
         }
 
         selectedModel = model
@@ -561,6 +766,81 @@ class AppStateManager: ObservableObject {
             stopServer()
             await startServer()
         }
+
+        if wasActive {
+            recordingModePromptMessage = "Recording stopped. Press \(currentHotkey.displayString) to start again with \(model.name)."
+            Log.app.info("Model changed while active; stopped recording and showing restart prompt for \(model.name)")
+        }
+    }
+
+    @discardableResult
+    func addCustomModel(identifier rawIdentifier: String) async -> Bool {
+        let identifier = Constants.Models.normalizedIdentifier(
+            rawIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+
+        guard !isModelSelectionLocked else {
+            customModelValidationError = modelSelectionLockMessage ?? "Wait for current model work to finish."
+            return false
+        }
+
+        guard Constants.Models.isValidIdentifier(identifier) else {
+            customModelValidationError = HuggingFaceModelLookupError.invalidIdentifier(rawIdentifier).localizedDescription
+            return false
+        }
+
+        if let existingModel = model(withIdentifier: identifier) {
+            customModelValidationError = nil
+            await setSelectedModel(existingModel)
+            return selectedModel.identifier == existingModel.identifier
+        }
+
+        guard let serverManager else {
+            customModelValidationError = "Server manager unavailable."
+            return false
+        }
+
+        customModelValidationError = nil
+        customModelValidationStatus = .checkingRepository
+        defer {
+            customModelValidationStatus = .idle
+        }
+
+        do {
+            let info = try await huggingFaceModelInfoProvider(identifier, huggingFaceTokenProvider())
+            try HuggingFaceModelLookup.validateSpeechToTextCandidate(info)
+
+            customModelValidationStatus = .validatingCompatibility
+            try await serverManager.validateModelCompatibility(identifier)
+
+            customModelValidationStatus = .saving
+            let model = CustomModelCatalogStore.model(for: info)
+            CustomModelCatalogStore.upsert(model)
+            customModels = CustomModelCatalogStore.loadModels()
+            selectedModel = model
+            UserDefaults.standard.set(model.identifier, forKey: Constants.UserDefaultsKeys.selectedModel)
+            modelDownloadStatus = .downloaded
+            modelDownloadError = nil
+            modelDownloadProgress = nil
+            lastDiagnosticErrorDetails = nil
+
+            if state == .serverRunning {
+                Log.server.info("Restarting server with custom model: \(model.name)")
+                stopServer()
+                await startServer()
+            }
+
+            return true
+        } catch {
+            Log.server.error("Failed to add custom model \(identifier): \(error.localizedDescription)")
+            customModelValidationError = error.localizedDescription
+            return false
+        }
+    }
+
+    func clearCustomModelValidationMessage() {
+        guard !customModelValidationStatus.isRunning else { return }
+        customModelValidationError = nil
     }
 
     private func ensureDefaultModelDownloadedIfNeeded() async {
@@ -585,28 +865,69 @@ class AppStateManager: ObservableObject {
             return
         }
 
+        let modelIdentifier = selectedModel.identifier
         modelDownloadStatus = .downloading
         modelDownloadError = nil
         modelDownloadProgress = nil
 
         do {
-            try await serverManager.downloadModel(selectedModel.identifier) { progress in
+            try await serverManager.downloadModel(modelIdentifier) { progress in
                 Task { @MainActor in
+                    guard self.selectedModel.identifier == modelIdentifier else {
+                        Log.server.debug("Ignoring download progress for stale model \(modelIdentifier)")
+                        return
+                    }
                     self.modelDownloadProgress = progress
                 }
+            }
+            guard selectedModel.identifier == modelIdentifier else {
+                Log.server.debug("Ignoring completed download for stale model \(modelIdentifier)")
+                return
             }
             modelDownloadStatus = .downloaded
             modelDownloadError = nil
             modelDownloadProgress = nil
 
-            if selectedModel.identifier == Constants.Models.defaultModel.identifier {
+            if modelIdentifier == Constants.Models.defaultModel.identifier {
                 UserDefaults.standard.set(true, forKey: Constants.UserDefaultsKeys.didAutoDownloadDefaultModel)
             }
         } catch {
-            Log.server.error("Failed to download model \(selectedModel.identifier): \(error)")
+            guard selectedModel.identifier == modelIdentifier else {
+                Log.server.debug("Ignoring download error for stale model \(modelIdentifier): \(error.localizedDescription)")
+                return
+            }
+            Log.server.error("Failed to download model \(modelIdentifier): \(error)")
             modelDownloadStatus = .notDownloaded
             modelDownloadError = error.localizedDescription
             modelDownloadProgress = nil
+        }
+    }
+
+    // MARK: - Audio Input Selection
+
+    func refreshAudioInputDevices() {
+        selectedAudioInputDeviceID = audioCapture?.selectedInputDeviceID() ?? AudioInputDevice.systemDefaultID
+        audioInputDevices = audioCapture?.refreshAvailableInputDevices() ?? [.systemDefault]
+    }
+
+    func setSelectedAudioInputDeviceID(_ deviceID: String) {
+        let normalizedID = AudioInputDeviceSelection.normalizedSelectionID(deviceID)
+        guard normalizedID != selectedAudioInputDeviceID else { return }
+
+        let wasRecording = state == .recording || state == .connecting
+        if wasRecording {
+            stopRecording()
+        } else {
+            clearRecordingModePrompt()
+        }
+
+        audioCapture?.setSelectedInputDeviceID(normalizedID)
+        selectedAudioInputDeviceID = normalizedID
+        refreshAudioInputDevices()
+
+        if wasRecording {
+            recordingModePromptMessage = "Recording stopped. Press \(currentHotkey.displayString) to start again with the selected microphone."
+            Log.app.info("Microphone changed while active; stopped recording before switching input")
         }
     }
 
@@ -665,8 +986,7 @@ class AppStateManager: ObservableObject {
     
     func shutdown() {
         permissionRefreshTask?.cancel()
-        pendingWebSocketDisconnectTask?.cancel()
-        pendingWebSocketDisconnectTask = nil
+        cancelPendingWebSocketDisconnect()
         stopRecording()
         stopServer()
         hotkeyManager?.stop()
@@ -676,14 +996,12 @@ class AppStateManager: ObservableObject {
     /// Best-effort cleanup before app termination to avoid leaving server processes running.
     func shutdownForTermination() async {
         permissionRefreshTask?.cancel()
-        pendingWebSocketDisconnectTask?.cancel()
-        pendingWebSocketDisconnectTask = nil
+        cancelPendingWebSocketDisconnect()
         stopRecording()
-        pendingWebSocketDisconnectTask?.cancel()
-        pendingWebSocketDisconnectTask = nil
-        webSocketClient?.disconnect()
-        webSocketClient = nil
-        audioCapture?.stopRecording()
+        cancelPendingWebSocketDisconnect()
+        finalizePendingRecordingSessionIfNeeded()
+        disconnectCurrentWebSocket()
+        stopAudioCapture()
         await serverManager?.stopAndWait(timeout: 2.0)
         hotkeyManager?.stop()
         isHotkeyActive = false
@@ -693,11 +1011,22 @@ class AppStateManager: ObservableObject {
 
 // MARK: - WebSocketClientDelegate
 
+private enum AppLifecycleError: LocalizedError {
+    case audioCaptureUnavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .audioCaptureUnavailable:
+            return "Audio capture is unavailable."
+        }
+    }
+}
+
 extension AppStateManager: WebSocketClientDelegate {
     
-    nonisolated func webSocketDidConnect(_ client: WebSocketClient) {
+    nonisolated func webSocketDidConnect(_ client: any WebSocketClienting) {
         Task { @MainActor in
-            guard client === webSocketClient else {
+            guard isCurrentWebSocketClient(client) else {
                 Log.websocket.debug("Ignoring connect callback from stale WebSocket client")
                 return
             }
@@ -706,30 +1035,40 @@ extension AppStateManager: WebSocketClientDelegate {
 
             // Send configuration with selected model
             let config = ClientConfig.with(model: selectedModel.identifier)
-            webSocketClient?.sendConfiguration(config)
+            client.sendConfiguration(config)
 
             // Start audio capture
             do {
-                try audioCapture?.startRecording()
+                guard let audioCapture else {
+                    throw AppLifecycleError.audioCaptureUnavailable
+                }
+                activeAudioSessionID = try audioCapture.startRecording()
                 state = .recording
             } catch {
                 Log.audio.error("Failed to start audio: \(error)")
+                activeAudioSessionID = nil
                 state = .error(error.localizedDescription)
-                webSocketClient?.disconnect()
-                webSocketClient = nil
+                if isCurrentWebSocketClient(client) {
+                    disconnectCurrentWebSocket()
+                }
             }
         }
     }
     
-    nonisolated func webSocketDidDisconnect(_ client: WebSocketClient, error: Error?) {
+    nonisolated func webSocketDidDisconnect(_ client: any WebSocketClienting, error: Error?) {
         Task { @MainActor in
-            guard client === webSocketClient else {
+            guard isCurrentWebSocketClient(client) else {
                 Log.websocket.debug("Ignoring disconnect callback from stale WebSocket client")
                 return
             }
             Log.websocket.info("webSocketDidDisconnect received (state: \(state), error: \(error?.localizedDescription ?? "none"))")
-            audioCapture?.stopRecording()
+            let hadPendingStoppedSession = pendingSessionCompletedAt != nil
+            cancelPendingWebSocketDisconnect()
+            stopAudioCapture()
             webSocketClient = nil
+            if hadPendingStoppedSession {
+                finalizePendingRecordingSessionIfNeeded()
+            }
             if state == .recording || state == .connecting {
                 if let error = error {
                     Log.websocket.error("WebSocket disconnected with error: \(error)")
@@ -742,19 +1081,19 @@ extension AppStateManager: WebSocketClientDelegate {
         }
     }
     
-    nonisolated func webSocketDidReceiveTranscription(_ client: WebSocketClient, transcription: ServerTranscription) {
+    nonisolated func webSocketDidReceiveTranscription(_ client: any WebSocketClienting, transcription: ServerTranscription) {
         Task { @MainActor in
-            guard client === webSocketClient else {
+            guard isCurrentWebSocketClient(client) else {
                 Log.websocket.debug("Ignoring transcription from stale WebSocket client")
                 return
             }
-            handleTranscription(transcription.text, isPartial: transcription.isPartial)
+            handleTranscription(transcription)
         }
     }
     
-    nonisolated func webSocketDidReceiveStatus(_ client: WebSocketClient, status: ServerStatus) {
+    nonisolated func webSocketDidReceiveStatus(_ client: any WebSocketClienting, status: ServerStatus) {
         Task { @MainActor in
-            guard client === webSocketClient else {
+            guard isCurrentWebSocketClient(client) else {
                 Log.websocket.debug("Ignoring status from stale WebSocket client")
                 return
             }
@@ -767,24 +1106,61 @@ extension AppStateManager: WebSocketClientDelegate {
 
 extension AppStateManager: AudioCaptureDelegate {
     
-    nonisolated func audioCaptureDidReceiveBuffer(_ buffer: Data) {
+    nonisolated func audioCaptureDidReceiveBuffer(_ buffer: Data, sessionID: AudioCaptureSessionID) {
         Task { @MainActor in
+            guard state == .recording, activeAudioSessionID == sessionID else {
+                Log.audio.debug("Ignoring audio buffer from stale capture session")
+                return
+            }
             webSocketClient?.sendAudioData(buffer)
         }
     }
     
-    nonisolated func audioCaptureDidUpdateAmplitude(_ amplitude: Float) {
+    nonisolated func audioCaptureDidUpdateAmplitude(_ amplitude: Float, sessionID: AudioCaptureSessionID) {
         Task { @MainActor in
+            guard state == .recording, activeAudioSessionID == sessionID else { return }
             audioAmplitude = amplitude
         }
     }
     
-    nonisolated func audioCaptureDidFail(error: Error) {
+    nonisolated func audioCaptureDidFail(error: Error, sessionID: AudioCaptureSessionID) {
         Task { @MainActor in
+            guard activeAudioSessionID == sessionID else {
+                Log.audio.debug("Ignoring error from stale capture session: \(error.localizedDescription)")
+                return
+            }
             Log.audio.error("Audio capture failed: \(error)")
+            stopAudioCapture()
+            disconnectCurrentWebSocket()
+
+            if recoverFromAudioRouteChangeIfNeeded(error) {
+                return
+            }
+
             state = .error(error.localizedDescription)
-            webSocketClient?.disconnect()
         }
+    }
+
+    private func recoverFromAudioRouteChangeIfNeeded(_ error: Error) -> Bool {
+        guard let audioError = error as? AudioError else { return false }
+
+        let promptMessage: String
+        switch audioError {
+        case .selectedInputUnavailable:
+            promptMessage = "Recording stopped because the selected microphone is unavailable. Choose another microphone or reconnect it, then press \(currentHotkey.displayString) to start again."
+        case .inputDeviceChanged:
+            promptMessage = "Recording stopped because the active microphone changed. Press \(currentHotkey.displayString) to start again."
+        default:
+            return false
+        }
+
+        cancelPendingWebSocketDisconnect()
+        resetRecordingSession(clearCompletedTranscription: true)
+        refreshAudioInputDevices()
+        recordingModePromptMessage = promptMessage
+        lastDiagnosticErrorDetails = nil
+        state = .serverRunning
+        return true
     }
 
     private func userFacingWebSocketErrorMessage(_ error: Error) -> String {
