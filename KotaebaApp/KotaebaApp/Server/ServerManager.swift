@@ -22,6 +22,11 @@ protocol ServerManaging: AnyObject {
 /// - Monitor server health
 /// - Capture server output for logging
 class ServerManager {
+    private enum RecoveryTiming {
+        static let gracefulTerminationTimeout: TimeInterval = 2.0
+        static let forceKillTimeout: TimeInterval = 1.0
+        static let processPollIntervalNanoseconds: UInt64 = 100_000_000
+    }
     
     // MARK: - Properties
     
@@ -250,21 +255,31 @@ class ServerManager {
             throw ServerError.portConflictRecoveryUnavailable
         }
 
-        let processGroupIDs = Set(conflict.processes.map(\.processGroupID))
+        let safeProcessGroupIDs = Set(conflict.processes.map(\.processGroupID).filter { $0 > 1 })
+        guard !safeProcessGroupIDs.isEmpty else {
+            Log.server.error(
+                "Refusing to terminate recoverable port conflict on \(conflict.host):\(conflict.port) because no safe process groups were found"
+            )
+            throw ServerError.failedToStart(
+                "Kotaeba detected an existing server on \(conflict.host):\(conflict.port), but could not safely stop it automatically. Close it manually, then try again.",
+                nil
+            )
+        }
+
         Log.server.warning(
             "Terminating recoverable Kotaeba server conflict on \(conflict.host):\(conflict.port) for PIDs \(conflict.processIDList)"
         )
 
-        for processGroupID in processGroupIDs {
+        for processGroupID in safeProcessGroupIDs {
             _ = killpg(processGroupID, SIGTERM)
         }
 
-        let deadline = Date().addingTimeInterval(2.0)
-        while processGroupIDs.contains(where: isProcessGroupActive) && Date() < deadline {
-            try? await Task.sleep(nanoseconds: 100_000_000)
+        let deadline = Date().addingTimeInterval(RecoveryTiming.gracefulTerminationTimeout)
+        while safeProcessGroupIDs.contains(where: isProcessGroupActive) && Date() < deadline {
+            try? await Task.sleep(nanoseconds: RecoveryTiming.processPollIntervalNanoseconds)
         }
 
-        let remainingGroupIDs = processGroupIDs.filter(isProcessGroupActive)
+        let remainingGroupIDs = safeProcessGroupIDs.filter(isProcessGroupActive)
         if !remainingGroupIDs.isEmpty {
             Log.server.warning(
                 "Recoverable conflict ignored SIGTERM for groups \(remainingGroupIDs.map(String.init).joined(separator: ", ")); sending SIGKILL"
@@ -273,9 +288,9 @@ class ServerManager {
                 _ = killpg(processGroupID, SIGKILL)
             }
 
-            let forceKillDeadline = Date().addingTimeInterval(1.0)
+            let forceKillDeadline = Date().addingTimeInterval(RecoveryTiming.forceKillTimeout)
             while remainingGroupIDs.contains(where: isProcessGroupActive) && Date() < forceKillDeadline {
-                try? await Task.sleep(nanoseconds: 100_000_000)
+                try? await Task.sleep(nanoseconds: RecoveryTiming.processPollIntervalNanoseconds)
             }
         }
 
