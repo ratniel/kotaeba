@@ -37,23 +37,23 @@ KotaebaApp/
 
 Key implementation areas:
 
-- `Core/AppStateManager.swift`: app orchestration and lifecycle
-- `Audio/AudioCaptureManager.swift`: microphone capture and audio pipeline
-- `Hotkey/HotkeyManager.swift`: global shortcut handling
-- `Hotkey/HotkeyProcessor.swift`: pure hotkey state machine
-- `TextInsertion/TextInserter.swift`: insertion strategies and clipboard safety
-- `Core/ModelCatalog.swift`: bundled/custom model metadata
-- `Data/StatisticsManager.swift`: statistics and session persistence
-- `Views/MainWindow/TranscriptionHistoryView.swift`: recent session history UI
+- `KotaebaApp/Core/AppStateManager.swift`: app orchestration and lifecycle
+- `KotaebaApp/Audio/AudioCaptureManager.swift`: microphone capture and audio pipeline
+- `KotaebaApp/Hotkey/HotkeyManager.swift`: global shortcut handling
+- `KotaebaApp/Hotkey/HotkeyProcessor.swift`: pure hotkey state machine
+- `KotaebaApp/TextInsertion/TextInserter.swift`: insertion strategies and clipboard safety
+- `KotaebaApp/Core/ModelCatalog.swift`: bundled/custom model metadata
+- `KotaebaApp/Data/StatisticsManager.swift`: statistics and session persistence
+- `KotaebaApp/Views/MainWindow/TranscriptionHistoryView.swift`: recent session history UI
 
 ## Local Development
 
 Build/test/install entry points:
 
 ```bash
-scripts/run_app.sh
-scripts/install_local_app.sh --clean
-xcodebuild test -project KotaebaApp/KotaebaApp.xcodeproj -scheme KotaebaApp -destination 'platform=macOS'
+../scripts/run_app.sh
+../scripts/install_local_app.sh --clean
+xcodebuild test -project KotaebaApp.xcodeproj -scheme KotaebaApp -destination 'platform=macOS'
 ```
 
 Use the install script for user-facing manual testing because it installs the same app path that macOS permissions attach to.
@@ -110,4 +110,4 @@ These are not release blockers by themselves, but they are still worth polishing
 
 - Long-dictation lock UX semantics
 - Fresh manual confirmation of the new cancel-to-history behavior
-- Swift concurrency warning cleanup in `Utilities/ShellCommandRunner.swift`
+- Swift concurrency warning cleanup in `KotaebaApp/Utilities/ShellCommandRunner.swift`
