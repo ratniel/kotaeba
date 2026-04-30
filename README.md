@@ -108,6 +108,11 @@ The merged release candidate on `main` passed:
 - `xcodebuild test -project KotaebaApp/KotaebaApp.xcodeproj -scheme KotaebaApp -destination 'platform=macOS'`
 - Result: `98 tests, 0 failures`
 
+## Known Limitations
+
+- Long-dictation lock currently follows a tap-based lock flow. If you expect a pure `hold Ctrl + double-tap X` gesture without the first tap acting like a normal start, the current behavior may feel different.
+- Text insertion depends on macOS Accessibility APIs and target-app behavior. Most common apps work, but insertion and fallback paste behavior can still vary between apps.
+
 ## Docs
 
 - [KotaebaApp/README.md](KotaebaApp/README.md)

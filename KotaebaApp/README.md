@@ -89,6 +89,11 @@ Current merged `main` release candidate:
 - Full XCTest suite passed
 - Result: `98 tests, 0 failures`
 
+## Known Limitations
+
+- Long-dictation lock currently uses the shipped tap-based lock flow; it may differ from a stricter `hold Ctrl + double-tap X` interaction model.
+- Text insertion still depends on Accessibility support and focused-app behavior, so compatibility can vary across macOS apps.
+
 Relevant focused coverage now exists for:
 
 - Hotkey state transitions
