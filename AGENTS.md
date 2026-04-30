@@ -5,9 +5,9 @@
 Kotaeba is a macOS speech-to-text system with two cooperating surfaces:
 
 - `KotaebaApp/`: native Swift/SwiftUI menu bar app for permissions, hotkeys, recording UI, audio capture, WebSocket streaming, model controls, statistics, and text insertion.
-- Repo root Python runtime: MLX Audio server/client tooling, Pydantic settings, WebSocket message models, setup scripts, release scripts, and local development utilities.
+- Repo root support files: Python dependency management, runtime setup helpers, release scripts, and local development utilities.
 
-Keep changes aligned with those boundaries. Swift app behavior belongs under `KotaebaApp/KotaebaApp/*`; backend runtime behavior belongs in `main.py`, `stt/`, `models/`, `config.py`, and related scripts.
+Keep changes aligned with those boundaries. Swift app behavior belongs under `KotaebaApp/KotaebaApp/*`; repo-root tooling changes belong in `pyproject.toml`, `scripts/`, `.github/workflows/`, and related support files.
 
 ## Current Architecture
 
@@ -24,7 +24,6 @@ Keep changes aligned with those boundaries. Swift app behavior belongs under `Ko
 Prefer these entrypoints when working locally:
 
 - Backend dev runtime: `uv sync`
-- Console STT client/server: `uv run main.py`
 - Build/run app helper: `scripts/run_app.sh`
 - Install local app helper: `scripts/install_local_app.sh`
 - Xcode tests:
@@ -69,7 +68,7 @@ For UX improvements inspired by Hex, prefer narrow, testable additions:
 - The user expects tests to run after every implemented feature. Run the relevant automated tests before handoff whenever code changes are made.
 - Add focused tests for pure logic such as hotkey state transitions, settings migrations, model metadata parsing, text sanitization, and insertion utilities.
 - For app-level changes, use existing `KotaebaApp/KotaebaAppTests/*` patterns.
-- For backend protocol changes, keep Swift `Messages.swift` and Python `models/websocket.py` in sync.
+- For backend protocol changes, keep Swift `Messages.swift` aligned with the `mlx_audio.server` WebSocket protocol.
 - If a behavior depends on Accessibility, microphone permissions, focused apps, or the system pasteboard, run what can be automated, then document manual verification steps when XCTest cannot cover it. If tests cannot be run, say exactly why in the final handoff.
 
 ## Code Review Pass
@@ -84,28 +83,13 @@ After implementing any feature, do a focused self-review before handoff:
 
 ## Harness Maintenance
 
-Update harness documents in the same workstream as meaningful decisions:
+Update public harness documents in the same workstream as meaningful decisions:
 
 - `AGENTS.md`: repo-wide architecture, workflow, commands, and recurring rules.
 - `KotaebaApp/AGENTS.md`: Swift/macOS app-specific implementation guidance.
-- `TODO.md`: open work, grouped by milestone or priority.
-- `completed_tasks.md`: completed milestones and shipped decisions with dates.
-- `docs/*`: supporting rationale or detailed design notes.
 
 Keep these files current and concrete. Replace stale instructions instead of layering contradictory old and new guidance.
 
-## Docs Layout
+## Private Notes
 
-Use feature-wise directories under `docs/` so future agents can follow the project's direction:
-
-- `docs/app/`: native macOS app architecture, implementation guides, and setup notes.
-- `docs/app/hotkeys/`: global hotkey behavior and fixes.
-- `docs/app/text-insertion/`: insertion architecture and app compatibility notes.
-- `docs/app/instant-transcription/`: instant server/model startup decisions.
-- `docs/backend/`: MLX Audio, streaming, and backend runtime notes.
-- `docs/testing/`: manual and automated test guides.
-- `docs/release/`: release, packaging, and distribution notes.
-- `docs/archive/`: historical fix summaries that should not drive new architecture.
-- `docs/research/`: research notes that are useful but not active product docs.
-
-Keep root markdown limited to active harness and entrypoint files: `README.md`, `AGENTS.md`, `TODO.md`, `completed_tasks.md`, and tool-specific root files such as `WARP.md` when a tool expects them there.
+Local planning notes can live in ignored paths such as `docs/`, `TODO.md`, and `completed_tasks.md`, but they should stay uncommitted unless the user explicitly wants them published.

@@ -1,6 +1,6 @@
 # Kotaeba
 
-Kotaeba is a local-first speech-to-text app for macOS. It combines a native Swift/SwiftUI menu bar client with a Python transcription runtime so you can start dictation from a global hotkey and insert text into other apps.
+Kotaeba is a local-first speech-to-text app for macOS. It combines a native Swift/SwiftUI menu bar client with a bundled local speech runtime so you can start dictation from a global hotkey and insert text into other apps.
 
 ## Features
 
@@ -76,7 +76,7 @@ Kotaeba lives in the macOS menu bar.
 Kotaeba has two cooperating parts:
 
 - `KotaebaApp/`: native macOS app for permissions, hotkeys, audio capture, UI, model controls, history, statistics, and text insertion
-- repo root Python runtime: MLX Audio server/client tooling, config, WebSocket models, setup scripts, and release helpers
+- repo root support files: dependency management, runtime setup helpers, and release scripts
 
 High-level flow:
 
@@ -95,7 +95,6 @@ Common commands:
 
 ```bash
 uv sync
-uv run main.py
 scripts/run_app.sh
 scripts/install_local_app.sh --clean
 xcodebuild test -project KotaebaApp/KotaebaApp.xcodeproj -scheme KotaebaApp -destination 'platform=macOS'
@@ -113,13 +112,10 @@ The merged release candidate on `main` passed:
 - Long-dictation lock currently follows a tap-based lock flow. If you expect a pure `hold Ctrl + double-tap X` gesture without the first tap acting like a normal start, the current behavior may feel different.
 - Text insertion depends on macOS Accessibility APIs and target-app behavior. Most common apps work, but insertion and fallback paste behavior can still vary between apps.
 
-## Docs
+## More Info
 
 - [KotaebaApp/README.md](KotaebaApp/README.md)
 - [AGENTS.md](AGENTS.md)
-- [docs/app](docs/app)
-- [docs/backend](docs/backend)
-- [docs/testing](docs/testing)
 
 ## License
 
