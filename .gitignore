@@ -54,6 +54,8 @@ data/
 docs/
 TODO.md
 completed_tasks.md
+AGENTS.md
+KotaebaApp/AGENTS.md
 
 # Editors and tooling
 .vscode/

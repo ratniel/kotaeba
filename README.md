@@ -115,7 +115,6 @@ The merged release candidate on `main` passed:
 ## More Info
 
 - [KotaebaApp/README.md](KotaebaApp/README.md)
-- [AGENTS.md](AGENTS.md)
 
 ## License
 
