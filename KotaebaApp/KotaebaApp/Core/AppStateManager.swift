@@ -45,6 +45,7 @@ class AppStateManager: ObservableObject {
     @Published private(set) var customModelValidationError: String?
     @Published private(set) var lastDiagnosticErrorDetails: String?
     @Published private(set) var serverStartupStage: ServerStartupStage?
+    @Published private(set) var serverPortConflictRecoveryMessage: String?
     @Published private(set) var aggregatedStats: AggregatedStats = .empty
     @Published private(set) var todayStats: AggregatedStats = .empty
     var availableModels: [Constants.Models.Model] {
@@ -61,6 +62,9 @@ class AppStateManager: ObservableObject {
     }
     var isModelSelectionLocked: Bool {
         modelPreflightState.locksModelSelection || state == .connecting || state == .recording
+    }
+    var canRecoverFromServerPortConflict: Bool {
+        serverPortConflictRecoveryMessage != nil
     }
     var modelSelectionLockMessage: String? {
         modelPreflightState.selectionLockMessage ?? (
@@ -357,29 +361,65 @@ class AppStateManager: ObservableObject {
             return
         }
 
-        serverStartupStage = .preparingRuntime
-        lastDiagnosticErrorDetails = nil
-        state = .serverStarting
+        prepareForServerStart()
 
         do {
-            // Start server with selected model pre-loaded
-            try await serverManager?.start(model: selectedModel.identifier) { [weak self] stage in
-                self?.serverStartupStage = stage
-            }
-            serverStartupStage = nil
-            lastDiagnosticErrorDetails = nil
-            state = .serverRunning
-            Log.server.info("Server started successfully with model: \(selectedModel.name)")
+            try await performServerStart()
         } catch {
-            serverStartupStage = nil
-            if let serverError = error as? ServerError {
-                lastDiagnosticErrorDetails = serverError.diagnosticDetails
-            } else {
-                lastDiagnosticErrorDetails = error.localizedDescription
-            }
-            state = .error(error.localizedDescription)
-            Log.server.error("Server failed to start: \(error)")
+            await handleServerStartFailure(error)
         }
+    }
+
+    func recoverFromServerPortConflict() async {
+        guard canRecoverFromServerPortConflict else { return }
+        guard let serverManager else { return }
+
+        prepareForServerStart()
+
+        do {
+            let conflict = try await serverManager.terminateRecoverablePortConflict()
+            Log.server.info("Recovered port conflict by stopping Kotaeba server PIDs \(conflict.processIDList)")
+            try await performServerStart()
+        } catch {
+            await handleServerStartFailure(error)
+        }
+    }
+
+    private func prepareForServerStart() {
+        serverStartupStage = .preparingRuntime
+        lastDiagnosticErrorDetails = nil
+        serverPortConflictRecoveryMessage = nil
+        state = .serverStarting
+    }
+
+    private func performServerStart() async throws {
+        try await serverManager?.start(model: selectedModel.identifier) { [weak self] stage in
+            self?.serverStartupStage = stage
+        }
+        serverStartupStage = nil
+        lastDiagnosticErrorDetails = nil
+        state = .serverRunning
+        Log.server.info("Server started successfully with model: \(selectedModel.name)")
+    }
+
+    private func handleServerStartFailure(_ error: Error) async {
+        serverStartupStage = nil
+        if let serverError = error as? ServerError {
+            lastDiagnosticErrorDetails = serverError.diagnosticDetails
+        } else {
+            lastDiagnosticErrorDetails = error.localizedDescription
+        }
+
+        if let serverError = error as? ServerError,
+           serverError.isPortConflict,
+           let conflict = try? await serverManager?.inspectRecoverablePortConflict() {
+            serverPortConflictRecoveryMessage = conflict.recoverySummary
+        } else {
+            serverPortConflictRecoveryMessage = nil
+        }
+
+        state = .error(error.localizedDescription)
+        Log.server.error("Server failed to start: \(error)")
     }
     
     func stopServer() {
@@ -391,6 +431,7 @@ class AppStateManager: ObservableObject {
         resetRecordingSession(clearCompletedTranscription: true)
         serverManager?.stop()
         serverStartupStage = nil
+        serverPortConflictRecoveryMessage = nil
         state = .idle
         Log.server.info("Server stopped")
     }

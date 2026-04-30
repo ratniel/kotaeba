@@ -37,40 +37,26 @@ KotaebaApp/
 
 Key implementation areas:
 
-- `KotaebaApp/Core/AppStateManager.swift`: app orchestration and lifecycle
-- `KotaebaApp/Audio/AudioCaptureManager.swift`: microphone capture and audio pipeline
-- `KotaebaApp/Hotkey/HotkeyManager.swift`: global shortcut handling
-- `KotaebaApp/Hotkey/HotkeyProcessor.swift`: pure hotkey state machine
-- `KotaebaApp/TextInsertion/TextInserter.swift`: insertion strategies and clipboard safety
-- `KotaebaApp/Core/ModelCatalog.swift`: bundled/custom model metadata
-- `KotaebaApp/Data/StatisticsManager.swift`: statistics and session persistence
-- `KotaebaApp/Views/MainWindow/TranscriptionHistoryView.swift`: recent session history UI
+- `Core/AppStateManager.swift`: app orchestration and lifecycle
+- `Audio/AudioCaptureManager.swift`: microphone capture and audio pipeline
+- `Hotkey/HotkeyManager.swift`: global shortcut handling
+- `Hotkey/HotkeyProcessor.swift`: pure hotkey state machine
+- `TextInsertion/TextInserter.swift`: insertion strategies and clipboard safety
+- `Core/ModelCatalog.swift`: bundled/custom model metadata
+- `Data/StatisticsManager.swift`: statistics and session persistence
+- `Views/MainWindow/TranscriptionHistoryView.swift`: recent session history UI
 
 ## Local Development
 
 Build/test/install entry points:
 
 ```bash
-../scripts/run_app.sh
-../scripts/install_local_app.sh --clean
-xcodebuild test -project KotaebaApp.xcodeproj -scheme KotaebaApp -destination 'platform=macOS'
+scripts/run_app.sh
+scripts/install_local_app.sh --clean
+xcodebuild test -project KotaebaApp/KotaebaApp.xcodeproj -scheme KotaebaApp -destination 'platform=macOS'
 ```
 
 Use the install script for user-facing manual testing because it installs the same app path that macOS permissions attach to.
-
-## Navigating The App
-
-The app is organized around a few core surfaces:
-
-- Menu bar item: the quickest way to open the app, check whether the server is ready, or quit
-- Main window: server controls, recording mode, model selection, statistics, and history
-- Settings tabs:
-  - General
-  - Hotkey
-  - Audio
-  - Transcription
-  - About
-- Recording bar: the transient overlay shown during active dictation
 
 ## Implemented Capabilities
 
@@ -82,17 +68,24 @@ The app is organized around a few core surfaces:
 - Model preflight state, download status, and custom model validation
 - Persisted transcription sessions, insertion metadata, and aggregate statistics
 
+## Release Verification Snapshot
+
+Manually exercised during the current release pass:
+
+- [x] Hotkey settings
+- [x] Basic recording cycle
+- [x] Text insertion reliability
+- [x] Microphone selection
+- [x] Model catalog flow
+- [x] Permissions flow
+- [x] Stats sanity check
+
 ## Automated Coverage
 
 Current merged `main` release candidate:
 
 - Full XCTest suite passed
 - Result: `98 tests, 0 failures`
-
-## Known Limitations
-
-- Long-dictation lock currently uses the shipped tap-based lock flow; it may differ from a stricter `hold Ctrl + double-tap X` interaction model.
-- Text insertion still depends on Accessibility support and focused-app behavior, so compatibility can vary across macOS apps.
 
 Relevant focused coverage now exists for:
 
@@ -110,4 +103,4 @@ These are not release blockers by themselves, but they are still worth polishing
 
 - Long-dictation lock UX semantics
 - Fresh manual confirmation of the new cancel-to-history behavior
-- Swift concurrency warning cleanup in `KotaebaApp/Utilities/ShellCommandRunner.swift`
+- Swift concurrency warning cleanup in `Utilities/ShellCommandRunner.swift`

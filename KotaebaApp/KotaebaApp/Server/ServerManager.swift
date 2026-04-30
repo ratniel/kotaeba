@@ -8,6 +8,8 @@ protocol ServerManaging: AnyObject {
     func start(model: String, progressHandler: ServerStartupProgressHandler?) async throws
     func stop()
     func stopAndWait(timeout: TimeInterval) async
+    func inspectRecoverablePortConflict() async throws -> ServerPortConflict?
+    func terminateRecoverablePortConflict() async throws -> ServerPortConflict
     func checkModelExists(_ modelIdentifier: String) async throws -> Bool
     func validateModelCompatibility(_ modelIdentifier: String) async throws
     func downloadModel(_ modelIdentifier: String, progressHandler: ((Double) -> Void)?) async throws
@@ -20,6 +22,11 @@ protocol ServerManaging: AnyObject {
 /// - Monitor server health
 /// - Capture server output for logging
 class ServerManager {
+    private enum RecoveryTiming {
+        static let gracefulTerminationTimeout: TimeInterval = 2.0
+        static let forceKillTimeout: TimeInterval = 1.0
+        static let processPollIntervalNanoseconds: UInt64 = 100_000_000
+    }
     
     // MARK: - Properties
     
@@ -217,6 +224,85 @@ class ServerManager {
         cleanup()
         isRunning = false
         Log.server.info("Server stopped")
+    }
+
+    func inspectRecoverablePortConflict() async throws -> ServerPortConflict? {
+        guard await checkHealth() else {
+            return nil
+        }
+
+        let processes = try await recoverableOwnedServerProcessesOnConfiguredPort()
+        guard !processes.isEmpty else {
+            return nil
+        }
+
+        return ServerPortConflict(
+            host: Constants.Server.host,
+            port: Constants.Server.port,
+            processes: processes.map {
+                ServerPortConflictProcess(
+                    processID: $0.processID,
+                    parentProcessID: $0.parentProcessID,
+                    processGroupID: $0.processGroupID,
+                    command: $0.command
+                )
+            }
+        )
+    }
+
+    func terminateRecoverablePortConflict() async throws -> ServerPortConflict {
+        guard let conflict = try await inspectRecoverablePortConflict() else {
+            throw ServerError.portConflictRecoveryUnavailable
+        }
+
+        let safeProcessGroupIDs = Set(conflict.processes.map(\.processGroupID).filter { $0 > 1 })
+        guard !safeProcessGroupIDs.isEmpty else {
+            Log.server.error(
+                "Refusing to terminate recoverable port conflict on \(conflict.host):\(conflict.port) because no safe process groups were found"
+            )
+            throw ServerError.failedToStart(
+                "Kotaeba detected an existing server on \(conflict.host):\(conflict.port), but could not safely stop it automatically. Close it manually, then try again.",
+                nil
+            )
+        }
+
+        Log.server.warning(
+            "Terminating recoverable Kotaeba server conflict on \(conflict.host):\(conflict.port) for PIDs \(conflict.processIDList)"
+        )
+
+        for processGroupID in safeProcessGroupIDs {
+            _ = killpg(processGroupID, SIGTERM)
+        }
+
+        let deadline = Date().addingTimeInterval(RecoveryTiming.gracefulTerminationTimeout)
+        while safeProcessGroupIDs.contains(where: isProcessGroupActive) && Date() < deadline {
+            try? await Task.sleep(nanoseconds: RecoveryTiming.processPollIntervalNanoseconds)
+        }
+
+        let remainingGroupIDs = safeProcessGroupIDs.filter(isProcessGroupActive)
+        if !remainingGroupIDs.isEmpty {
+            Log.server.warning(
+                "Recoverable conflict ignored SIGTERM for groups \(remainingGroupIDs.map(String.init).joined(separator: ", ")); sending SIGKILL"
+            )
+            for processGroupID in remainingGroupIDs {
+                _ = killpg(processGroupID, SIGKILL)
+            }
+
+            let forceKillDeadline = Date().addingTimeInterval(RecoveryTiming.forceKillTimeout)
+            while remainingGroupIDs.contains(where: isProcessGroupActive) && Date() < forceKillDeadline {
+                try? await Task.sleep(nanoseconds: RecoveryTiming.processPollIntervalNanoseconds)
+            }
+        }
+
+        if await checkHealth() {
+            throw ServerError.failedToStart(
+                "Kotaeba could not stop the existing server on \(conflict.host):\(conflict.port). Close it manually, then try again.",
+                nil
+            )
+        }
+
+        clearServerMetadata()
+        return conflict
     }
     
     private func cleanup() {
@@ -476,6 +562,26 @@ class ServerManager {
         }
     }
 
+    private func recoverableOwnedServerProcessesOnConfiguredPort() async throws -> [ProcessSnapshot] {
+        let logDirectory = Constants.supportDirectory.appendingPathComponent("logs").path
+        let runtimeHints = [
+            Constants.supportDirectory.path,
+            Constants.Setup.expectedBundledRuntimeLocation.path,
+            Constants.Setup.bundledRuntimeProjectLocation.path,
+            Constants.Setup.pythonPath?.deletingLastPathComponent().deletingLastPathComponent().path
+        ].compactMap { $0 }
+
+        return try await listProcesses().filter { snapshot in
+            guard snapshot.command.contains("mlx_audio.server"),
+                  snapshot.command.contains("--port \(Constants.Server.port)"),
+                  snapshot.command.contains(logDirectory) else {
+                return false
+            }
+
+            return runtimeHints.contains(where: { snapshot.command.contains($0) })
+        }
+    }
+
     private func listProcesses() async throws -> [ProcessSnapshot] {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .utility).async {
@@ -491,7 +597,7 @@ class ServerManager {
     private func listProcessesSynchronously() throws -> [ProcessSnapshot] {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/ps")
-        process.arguments = ["-axo", "pid=,pgid=,command="]
+        process.arguments = ["-axo", "pid=,ppid=,pgid=,command="]
 
         let outputPipe = Pipe()
         process.standardOutput = outputPipe
@@ -714,6 +820,39 @@ class ServerManager {
 
 extension ServerManager: ServerManaging {}
 
+struct ServerPortConflict: Equatable {
+    let host: String
+    let port: Int
+    let processes: [ServerPortConflictProcess]
+
+    var isLikelyStale: Bool {
+        processes.allSatisfy { $0.parentProcessID == 1 }
+    }
+
+    var processIDList: String {
+        processes.map(\.processID).map(String.init).joined(separator: ", ")
+    }
+
+    var recoverySummary: String {
+        let processLabel = processes.count == 1 ? "process" : "processes"
+        let summaryPrefix: String
+        if isLikelyStale {
+            summaryPrefix = "Detected stale Kotaeba server \(processLabel)"
+        } else {
+            summaryPrefix = "Detected Kotaeba server \(processLabel) already using this port"
+        }
+
+        return "\(summaryPrefix) on \(host):\(port) (PID \(processIDList))."
+    }
+}
+
+struct ServerPortConflictProcess: Equatable {
+    let processID: Int32
+    let parentProcessID: Int32
+    let processGroupID: Int32
+    let command: String
+}
+
 private struct OwnedServerMetadata: Codable {
     let processID: Int32
     let processGroupID: Int32?
@@ -726,6 +865,7 @@ private struct OwnedServerMetadata: Codable {
 
 private struct ProcessSnapshot {
     let processID: Int32
+    let parentProcessID: Int32
     let processGroupID: Int32
     let command: String
 
@@ -733,16 +873,18 @@ private struct ProcessSnapshot {
         let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return nil }
 
-        let parts = trimmed.split(maxSplits: 2, whereSeparator: \.isWhitespace)
-        guard parts.count == 3,
+        let parts = trimmed.split(maxSplits: 3, whereSeparator: \.isWhitespace)
+        guard parts.count == 4,
               let processID = Int32(parts[0]),
-              let processGroupID = Int32(parts[1]) else {
+              let parentProcessID = Int32(parts[1]),
+              let processGroupID = Int32(parts[2]) else {
             return nil
         }
 
         self.processID = processID
+        self.parentProcessID = parentProcessID
         self.processGroupID = processGroupID
-        self.command = String(parts[2])
+        self.command = String(parts[3])
     }
 }
 
@@ -755,6 +897,16 @@ enum ServerError: LocalizedError {
     case startupTimeout
     case healthCheckFailed
     case invalidModelIdentifier
+    case portConflictRecoveryUnavailable
+
+    var isPortConflict: Bool {
+        switch self {
+        case .failedToStart(let reason, _):
+            return reason.contains("already listening on") || reason.contains("already be using")
+        default:
+            return false
+        }
+    }
 
     var diagnosticDetails: String? {
         switch self {
@@ -779,6 +931,8 @@ enum ServerError: LocalizedError {
             return "Server health check failed"
         case .invalidModelIdentifier:
             return "Invalid model identifier"
+        case .portConflictRecoveryUnavailable:
+            return "No recoverable Kotaeba server conflict was found on the configured port"
         }
     }
 }

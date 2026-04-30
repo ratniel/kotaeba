@@ -38,7 +38,7 @@ final class AppStateManagerTests: XCTestCase {
 
         await Task.yield()
 
-        XCTAssertFalse(mockServer.startCalled)
+        XCTAssertEqual(mockServer.startCallCount, 0)
     }
 
     func testStartServerUpdatesState() async {
@@ -49,7 +49,7 @@ final class AppStateManagerTests: XCTestCase {
 
         await manager.startServer()
 
-        XCTAssertTrue(mockServer.startCalled)
+        XCTAssertEqual(mockServer.startCallCount, 1)
         XCTAssertEqual(manager.state, AppState.serverRunning)
     }
 
@@ -62,6 +62,72 @@ final class AppStateManagerTests: XCTestCase {
 
         XCTAssertTrue(mockServer.stopCalled)
         XCTAssertEqual(manager.state, AppState.idle)
+    }
+
+    func testRecoverablePortConflictShowsRecoveryAction() async {
+        let mockServer = MockServerManager()
+        mockServer.startError = ServerError.failedToStart(
+            "Another server is already listening on localhost:9999. Stop the stale Kotaeba/MLX server process and try again.",
+            nil
+        )
+        mockServer.inspectPortConflictResult = ServerPortConflict(
+            host: "localhost",
+            port: 9999,
+            processes: [
+                ServerPortConflictProcess(
+                    processID: 32447,
+                    parentProcessID: 1,
+                    processGroupID: 32447,
+                    command: "/Users/ratniel/Library/Application Support/Kotaeba/.venv/bin/python -m mlx_audio.server --port 9999"
+                )
+            ]
+        )
+        let manager = AppStateManager(serverManager: mockServer, shouldAutoStartServer: false)
+
+        await manager.startServer()
+
+        XCTAssertEqual(
+            manager.state,
+            AppState.error("Failed to start server: Another server is already listening on localhost:9999. Stop the stale Kotaeba/MLX server process and try again.")
+        )
+        XCTAssertTrue(manager.canRecoverFromServerPortConflict)
+        XCTAssertEqual(
+            manager.serverPortConflictRecoveryMessage,
+            "Detected stale Kotaeba server process on localhost:9999 (PID 32447)."
+        )
+    }
+
+    func testRecoverFromPortConflictTerminatesExistingServerAndRestarts() async {
+        let mockServer = MockServerManager()
+        let conflict = ServerPortConflict(
+            host: "localhost",
+            port: 9999,
+            processes: [
+                ServerPortConflictProcess(
+                    processID: 32447,
+                    parentProcessID: 1,
+                    processGroupID: 32447,
+                    command: "/Users/ratniel/Library/Application Support/Kotaeba/.venv/bin/python -m mlx_audio.server --port 9999"
+                )
+            ]
+        )
+        mockServer.startError = ServerError.failedToStart(
+            "Another server is already listening on localhost:9999. Stop the stale Kotaeba/MLX server process and try again.",
+            nil
+        )
+        mockServer.inspectPortConflictResult = conflict
+        mockServer.terminatePortConflictResult = conflict
+        let manager = AppStateManager(serverManager: mockServer, shouldAutoStartServer: false)
+
+        await manager.startServer()
+        mockServer.startError = nil
+
+        await manager.recoverFromServerPortConflict()
+
+        XCTAssertEqual(mockServer.startCallCount, 2)
+        XCTAssertTrue(mockServer.terminatePortConflictCalled)
+        XCTAssertEqual(manager.state, AppState.serverRunning)
+        XCTAssertNil(manager.serverPortConflictRecoveryMessage)
     }
 
     func testChangingModeWhileConnectingStopsAndPromptsForNewMode() async {
@@ -192,11 +258,18 @@ final class AppStateManagerTests: XCTestCase {
 
 private final class MockServerManager: ServerManaging {
     var unexpectedExitHandler: (@MainActor (String) -> Void)?
-    private(set) var startCalled = false
+    private(set) var startCallCount = 0
     private(set) var stopCalled = false
+    private(set) var terminatePortConflictCalled = false
+    var startError: Error?
+    var inspectPortConflictResult: ServerPortConflict?
+    var terminatePortConflictResult: ServerPortConflict?
 
     func start(model: String, progressHandler: ServerStartupProgressHandler?) async throws {
-        startCalled = true
+        startCallCount += 1
+        if let startError {
+            throw startError
+        }
         progressHandler?(.launchingServer)
     }
 
@@ -206,6 +279,18 @@ private final class MockServerManager: ServerManaging {
 
     func stopAndWait(timeout: TimeInterval) async {
         stop()
+    }
+
+    func inspectRecoverablePortConflict() async throws -> ServerPortConflict? {
+        inspectPortConflictResult
+    }
+
+    func terminateRecoverablePortConflict() async throws -> ServerPortConflict {
+        terminatePortConflictCalled = true
+        if let terminatePortConflictResult {
+            return terminatePortConflictResult
+        }
+        throw ServerError.portConflictRecoveryUnavailable
     }
 
     func checkModelExists(_ modelIdentifier: String) async throws -> Bool {
