@@ -110,6 +110,14 @@ struct ServerControlView: View {
                 }
             }
 
+            if let recoveryMessage = stateManager.serverPortConflictRecoveryMessage {
+                PortConflictRecoveryView(message: recoveryMessage) {
+                    Task {
+                        await stateManager.recoverFromServerPortConflict()
+                    }
+                }
+            }
+
             if shouldShowModelSelection {
                 ModelSelectionView()
             }
@@ -150,7 +158,10 @@ struct ServerControlView: View {
 
     private var buttonTitle: String {
         switch stateManager.state {
-        case .idle, .error: return "Start Server"
+        case .idle:
+            return "Start Server"
+        case .error:
+            return stateManager.canRecoverFromServerPortConflict ? "Stop & Restart" : "Start Server"
         case .serverStarting: return "Starting..."
         default: return "Stop Server"
         }
@@ -158,7 +169,10 @@ struct ServerControlView: View {
 
     private var buttonIcon: String {
         switch stateManager.state {
-        case .idle, .error: return "power"
+        case .idle:
+            return "power"
+        case .error:
+            return stateManager.canRecoverFromServerPortConflict ? "arrow.clockwise.circle.fill" : "power"
         case .serverStarting: return "arrow.clockwise"
         default: return "stop.fill"
         }
@@ -213,12 +227,59 @@ struct ServerControlView: View {
     private func toggleServer() {
         Task {
             switch stateManager.state {
-            case .idle, .error:
+            case .idle:
                 await stateManager.startServer()
+            case .error:
+                if stateManager.canRecoverFromServerPortConflict {
+                    await stateManager.recoverFromServerPortConflict()
+                } else {
+                    await stateManager.startServer()
+                }
             default:
                 stateManager.stopServer()
             }
         }
+    }
+}
+
+struct PortConflictRecoveryView: View {
+    let message: String
+    let recover: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "exclamationmark.arrow.trianglehead.2.clockwise.rotate.90")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Constants.UI.accentOrange)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Existing Kotaeba server detected")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Constants.UI.textPrimary)
+
+                Text(message)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Constants.UI.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Button("Stop existing server and restart") {
+                    recover()
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Constants.UI.accentOrange)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Constants.UI.surfaceDark.opacity(0.9))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Constants.UI.accentOrange.opacity(0.35), lineWidth: 1)
+                )
+        )
     }
 }
 

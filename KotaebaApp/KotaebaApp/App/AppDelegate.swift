@@ -81,6 +81,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Server control
         switch state {
         case .idle, .error:
+            if AppStateManager.shared.canRecoverFromServerPortConflict {
+                menu.addItem(
+                    NSMenuItem(
+                        title: "Stop Existing Kotaeba Server and Restart",
+                        action: #selector(recoverFromServerPortConflict),
+                        keyEquivalent: "r"
+                    )
+                )
+            }
             menu.addItem(NSMenuItem(title: "Start Server", action: #selector(startServer), keyEquivalent: "s"))
         case .serverRunning, .recording:
             menu.addItem(NSMenuItem(title: "Stop Server", action: #selector(stopServer), keyEquivalent: "s"))
@@ -169,6 +178,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.updateMenu()
             }
             .store(in: &cancellables)
+
+        AppStateManager.shared.$serverPortConflictRecoveryMessage
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.updateMenu()
+            }
+            .store(in: &cancellables)
     }
 
     private func observeApplicationActivation() {
@@ -245,6 +261,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     @objc private func stopServer() {
         AppStateManager.shared.stopServer()
+    }
+
+    @objc private func recoverFromServerPortConflict() {
+        Task {
+            await AppStateManager.shared.recoverFromServerPortConflict()
+        }
     }
     
     @objc private func openMainWindow() {
